@@ -4,7 +4,7 @@
 // > Propriétés du script — jamais dans le code, jamais visibles des enseignants.
 // ═══════════════════════════════════════════════════════════════════════
 
-function configWhatsApp() {
+function configWhatsApp_() {
   const p = PropertiesService.getScriptProperties();
   return {
     actif: p.getProperty('WHATSAPP_ENABLED') !== 'false',
@@ -33,7 +33,7 @@ const MESSAGES_META = {
 
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
-function dateLongueFr(iso) {
+function dateLongueFr_(iso) {
   const parties = iso.split('-');
   const jour = parseInt(parties[2], 10);
   const mois = parseInt(parties[1], 10);
@@ -44,14 +44,14 @@ function dateLongueFr(iso) {
  * Envoie le message WhatsApp d'absence. Retourne { messageId } en cas de succès,
  * lève une Error au message lisible (affiché à l'enseignant) en cas d'échec.
  */
-function envoyerMessageAbsence(params) {
-  const c = configWhatsApp();
+function envoyerMessageAbsence_(params) {
+  const c = configWhatsApp_();
   if (!c.actif) throw new Error('Les notifications WhatsApp sont désactivées (propriété WHATSAPP_ENABLED=false).');
 
   if (c.simulation) {
     Logger.log(
       '[WhatsApp simulation] -> %s : %s absent(e) en %s le %s a %s',
-      params.telephone, params.eleveNom, params.matiere, dateLongueFr(params.dateSeance), params.heure
+      params.telephone, params.eleveNom, params.matiere, dateLongueFr_(params.dateSeance), params.heure
     );
     return { messageId: 'simulation-' + new Date().getTime() };
   }
@@ -72,7 +72,7 @@ function envoyerMessageAbsence(params) {
       language: { code: c.langue },
       components: [{
         type: 'body',
-        parameters: [params.eleveNom, params.matiere, dateLongueFr(params.dateSeance), params.heure].map((t) => ({ type: 'text', text: t })),
+        parameters: [params.eleveNom, params.matiere, dateLongueFr_(params.dateSeance), params.heure].map((t) => ({ type: 'text', text: t })),
       }],
     },
   };
@@ -109,49 +109,49 @@ function envoyerMessageAbsence(params) {
  * Crée l'entrée de journal si elle n'existe pas (une seule fois par séance+élève,
  * même si l'élève est repointé plusieurs fois), puis tente l'envoi.
  */
-function declencherNotificationAbsence(seance, eleve) {
-  const entree = avecVerrou(() => {
-    const trouvee = versObjets(FEUILLES.NOTIFICATIONS).find((n) => n.seance_id === seance.id && n.eleve_id === eleve.id);
+function declencherNotificationAbsence_(seance, eleve) {
+  const entree = avecVerrou_(() => {
+    const trouvee = versObjets_(FEUILLES.NOTIFICATIONS).find((n) => n.seance_id === seance.id && n.eleve_id === eleve.id);
     if (trouvee) return trouvee;
-    return inserer(FEUILLES.NOTIFICATIONS, {
+    return inserer_(FEUILLES.NOTIFICATIONS, {
       seance_id: seance.id, eleve_id: eleve.id, telephone: eleve.parent_whatsapp,
-      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: nowIso(),
+      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: nowIso_(),
     });
   });
   if (entree.statut !== 'en_attente') return; // déjà envoyé, ou déjà marqué échoué (voir bouton « Renvoyer »)
-  tenterEnvoi(entree.id, seance, eleve);
+  tenterEnvoi_(entree.id, seance, eleve);
 }
 
-function tenterEnvoi(notifId, seance, eleve) {
-  const avant = trouverParId(FEUILLES.NOTIFICATIONS, notifId);
+function tenterEnvoi_(notifId, seance, eleve) {
+  const avant = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
   const tentatives = (avant ? avant.tentatives : 0) + 1;
   try {
-    const resultat = envoyerMessageAbsence({
+    const resultat = envoyerMessageAbsence_({
       telephone: eleve.parent_whatsapp, eleveNom: `${eleve.prenom} ${eleve.nom}`,
       matiere: seance.matiere, dateSeance: seance.date_seance, heure: seance.heure_debut,
     });
-    mettreAJour(FEUILLES.NOTIFICATIONS, notifId, {
+    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, {
       statut: 'envoye', erreur: '', message_id: resultat.messageId, telephone: eleve.parent_whatsapp,
-      maj_le: nowIso(), tentatives: tentatives,
+      maj_le: nowIso_(), tentatives: tentatives,
     });
   } catch (e) {
-    mettreAJour(FEUILLES.NOTIFICATIONS, notifId, {
+    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, {
       statut: 'echoue', erreur: String(e.message).slice(0, 500), telephone: eleve.parent_whatsapp,
-      maj_le: nowIso(), tentatives: tentatives,
+      maj_le: nowIso_(), tentatives: tentatives,
     });
   }
 }
 
 function listerNotifications(jeton, statut) {
-  exigerAdmin(jeton);
-  const seances = versObjets(FEUILLES.SEANCES);
-  const eleves = versObjets(FEUILLES.ELEVES);
-  return versObjets(FEUILLES.NOTIFICATIONS)
+  exigerAdmin_(jeton);
+  const seances = versObjets_(FEUILLES.SEANCES);
+  const eleves = versObjets_(FEUILLES.ELEVES);
+  return versObjets_(FEUILLES.NOTIFICATIONS)
     .filter((n) => !statut || n.statut === statut)
     .map((n) => {
       const s = seances.find((x) => x.id === n.seance_id) || {};
       const e = eleves.find((x) => x.id === n.eleve_id) || {};
-      return Object.assign(sansLigne(n), {
+      return Object.assign(sansLigne_(n), {
         matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut, classe: s.classe,
         nom: e.nom, prenom: e.prenom, parent_nom: e.parent_nom,
       });
@@ -162,16 +162,16 @@ function listerNotifications(jeton, statut) {
 
 /** Réservé à l'administrateur, ou à l'enseignant responsable de la séance concernée. */
 function renvoyerNotification(jeton, notifId) {
-  const u = exigerConnexion(jeton);
-  const n = trouverParId(FEUILLES.NOTIFICATIONS, notifId);
+  const u = exigerConnexion_(jeton);
+  const n = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
   if (!n) throw new Error('Notification introuvable.');
-  const seance = trouverParId(FEUILLES.SEANCES, n.seance_id);
+  const seance = trouverParId_(FEUILLES.SEANCES, n.seance_id);
   if (u.role !== 'admin' && (!seance || seance.enseignant_id !== u.id)) {
     throw new Error('Cette séance ne vous est pas attribuée.');
   }
   if (n.statut !== 'echoue') throw new Error('Seul un message échoué peut être renvoyé.');
-  const eleve = trouverParId(FEUILLES.ELEVES, n.eleve_id);
-  mettreAJour(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
-  tenterEnvoi(notifId, seance, eleve);
-  return sansLigne(trouverParId(FEUILLES.NOTIFICATIONS, notifId));
+  const eleve = trouverParId_(FEUILLES.ELEVES, n.eleve_id);
+  mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
+  tenterEnvoi_(notifId, seance, eleve);
+  return sansLigne_(trouverParId_(FEUILLES.NOTIFICATIONS, notifId));
 }

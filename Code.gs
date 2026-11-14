@@ -6,22 +6,21 @@
 function doGet(e) {
   // Page de test : ajoutez  ?test=1  à la fin du lien de l'application pour vérifier
   // que le déploiement répond, sans dépendre de l'écran de l'application.
-  if (e && e.parameter && e.parameter.test) return pageDeTest();
+  if (e && e.parameter && e.parameter.test) return pageDeTest_();
 
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Excellence Group · Suivi de présence')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-function pageDeTest() {
+function pageDeTest_() {
   let feuillesOk = 'non';
   let adminOk = 'non';
   try {
-    classeur();
-    feuillesOk = Object.keys(FEUILLES).filter((k) => k !== 'INVITATIONS').every((k) => classeur().getSheetByName(FEUILLES[k].nom)) ? 'oui' : 'non (lancez « 1) Initialiser les feuilles »)';
+    classeur_();
+    feuillesOk = Object.keys(FEUILLES).filter((k) => k !== 'INVITATIONS').every((k) => classeur_().getSheetByName(FEUILLES[k].nom)) ? 'oui' : 'non (lancez « 1) Initialiser les feuilles »)';
     if (feuillesOk === 'oui') {
-      adminOk = versObjets(FEUILLES.UTILISATEURS).some((u) => u.actif && u.role === 'admin') ? 'oui' : 'non (lancez « 2) Créer un administrateur »)';
+      adminOk = versObjets_(FEUILLES.UTILISATEURS).some((u) => u.actif && u.role === 'admin') ? 'oui' : 'non (lancez « 2) Créer un administrateur »)';
     }
   } catch (err) {
     feuillesOk = 'erreur : ' + err.message;

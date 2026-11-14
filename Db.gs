@@ -18,7 +18,7 @@ let classeurEnCache = null;
  * Le classeur de données. Dans une application web, « le classeur actif » n'est pas toujours défini :
  * on mémorise donc son identifiant lors de « Initialiser les feuilles » et on l'utilise ensuite.
  */
-function classeur() {
+function classeur_() {
   if (classeurEnCache) return classeurEnCache;
   const id = PropertiesService.getScriptProperties().getProperty('CLASSEUR_ID');
   const c = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
@@ -30,14 +30,14 @@ function classeur() {
 }
 
 /** Feuille correspondant à une définition de FEUILLES. Message clair si « Initialiser » n'a pas été lancé. */
-function feuille(def) {
-  let s = classeur().getSheetByName(def.nom);
+function feuille_(def) {
+  let s = classeur_().getSheetByName(def.nom);
   // La feuille des invitations a été ajoutée après la première version : on la crée automatiquement si elle manque.
   if (!s && def === FEUILLES.INVITATIONS) {
-    s = classeur().insertSheet(def.nom);
+    s = classeur_().insertSheet(def.nom);
     s.getRange(1, 1, 1, def.entetes.length).setValues([def.entetes]);
     s.setFrozenRows(1);
-    appliquerFormatsTexte(def);
+    appliquerFormatsTexte_(def);
   }
   if (!s) {
     throw new Error(
@@ -60,26 +60,27 @@ function onOpen() {
 
 /** À lancer une seule fois (ou sans risque plusieurs fois) : crée les feuilles et leurs en-têtes. */
 function initialiserFeuilles() {
+  const ui = SpreadsheetApp.getUi(); // échoue hors de Google Sheets : cette fonction ne peut pas être lancée depuis l'application web
   // Mémorise le classeur pour que l'application web (qui n'a pas de « classeur actif ») le retrouve.
   PropertiesService.getScriptProperties().setProperty('CLASSEUR_ID', SpreadsheetApp.getActiveSpreadsheet().getId());
   Object.keys(FEUILLES).forEach((cle) => {
     const def = FEUILLES[cle];
-    let s = classeur().getSheetByName(def.nom);
-    if (!s) s = classeur().insertSheet(def.nom);
+    let s = classeur_().getSheetByName(def.nom);
+    if (!s) s = classeur_().insertSheet(def.nom);
     const premiereLigne = s.getRange(1, 1, 1, def.entetes.length).getValues()[0];
     const dejaOk = def.entetes.every((e, i) => premiereLigne[i] === e);
     if (!dejaOk) {
       s.getRange(1, 1, 1, def.entetes.length).setValues([def.entetes]);
       s.setFrozenRows(1);
     }
-    appliquerFormatsTexte(def);
+    appliquerFormatsTexte_(def);
   });
   // La feuille vide créée par défaut avec un nouveau classeur ne sert à rien : on la retire si elle est seule et vide.
   ['Feuille 1', 'Sheet1'].forEach((nomDefaut) => {
-    const d = classeur().getSheetByName(nomDefaut);
-    if (d && classeur().getSheets().length > 1 && d.getLastRow() === 0) classeur().deleteSheet(d);
+    const d = classeur_().getSheetByName(nomDefaut);
+    if (d && classeur_().getSheets().length > 1 && d.getLastRow() === 0) classeur_().deleteSheet(d);
   });
-  SpreadsheetApp.getUi().alert('Feuilles prêtes. Passez maintenant à « 2) Créer un administrateur ».');
+  ui.alert('Feuilles prêtes. Passez maintenant à « 2) Créer un administrateur ».');
 }
 
 function creerAdministrateurDepuisMenu() {
@@ -96,7 +97,7 @@ function creerAdministrateurDepuisMenu() {
   if (mdp.getSelectedButton() !== ui.Button.OK) return;
 
   try {
-    const u = creerCompteInterne(nom.getResponseText(), email.getResponseText(), mdp.getResponseText(), 'admin');
+    const u = creerCompteInterne_(nom.getResponseText(), email.getResponseText(), mdp.getResponseText(), 'admin');
     ui.alert(`Administrateur créé. Identifiant : ${u.email}\n\nOuvrez maintenant l'application (Déployer > Gérer les déploiements > icône lien) et connectez-vous avec cet identifiant et ce mot de passe.`);
   } catch (e) {
     ui.alert('Erreur : ' + e.message);
@@ -112,23 +113,23 @@ function creerAdministrateurDepuisMenu() {
 const COLONNES_NON_TEXTE = ['actif', 'tentatives'];
 const COLONNES_TELEPHONE = ['parent_whatsapp', 'telephone'];
 
-function estColonneTexte(h) {
+function estColonneTexte_(h) {
   return COLONNES_NON_TEXTE.indexOf(h) === -1;
 }
 
-function formatsLigne(def) {
-  return [def.entetes.map((h) => (estColonneTexte(h) ? '@' : 'General'))];
+function formatsLigne_(def) {
+  return [def.entetes.map((h) => (estColonneTexte_(h) ? '@' : 'General'))];
 }
 
-function fuseauClasseur() {
-  return classeur().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+function fuseauClasseur_() {
+  return classeur_().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
 }
 
 /** Rend une valeur lue dans la feuille « propre » : jamais de Date ni de nombre là où on attend du texte. */
-function normaliserValeur(h, v) {
-  if (!estColonneTexte(h)) return v;
+function normaliserValeur_(h, v) {
+  if (!estColonneTexte_(h)) return v;
   if (Object.prototype.toString.call(v) === '[object Date]') {
-    const tz = fuseauClasseur();
+    const tz = fuseauClasseur_();
     if (h === 'date_seance') return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
     if (h === 'heure_debut') {
       // Arrondi à la minute : une heure seule est stockée comme une date en 1899, avec parfois quelques secondes d'écart.
@@ -146,15 +147,15 @@ function normaliserValeur(h, v) {
 }
 
 /** Toutes les lignes d'une feuille sous forme d'objets {colonne: valeur}. __ligne = numéro de ligne réel dans la feuille. */
-function versObjets(def) {
-  const s = feuille(def);
+function versObjets_(def) {
+  const s = feuille_(def);
   const donnees = s.getDataRange().getValues();
   const entetes = donnees[0];
   const lignes = [];
   for (let i = 1; i < donnees.length; i++) {
     if (!donnees[i][0]) continue; // ligne vide : on l'ignore
     const o = {};
-    entetes.forEach((h, c) => (o[h] = normaliserValeur(h, donnees[i][c])));
+    entetes.forEach((h, c) => (o[h] = normaliserValeur_(h, donnees[i][c])));
     o.__ligne = i + 1;
     lignes.push(o);
   }
@@ -162,17 +163,17 @@ function versObjets(def) {
 }
 
 /** Écrit une ligne en imposant le format texte avant l'écriture (sinon Sheets convertit les valeurs). */
-function ecrireLigne(s, numLigne, def, ligne) {
+function ecrireLigne_(s, numLigne, def, ligne) {
   const zone = s.getRange(numLigne, 1, 1, def.entetes.length);
-  zone.setNumberFormats(formatsLigne(def));
+  zone.setNumberFormats(formatsLigne_(def));
   zone.setValues([ligne]);
 }
 
 /** Applique le format texte à toutes les colonnes concernées d'une feuille (lancé par « Initialiser » et « Réparer »). */
-function appliquerFormatsTexte(def) {
-  const s = feuille(def);
+function appliquerFormatsTexte_(def) {
+  const s = feuille_(def);
   def.entetes.forEach((h, i) => {
-    if (estColonneTexte(h)) s.getRange(1, i + 1, s.getMaxRows(), 1).setNumberFormat('@');
+    if (estColonneTexte_(h)) s.getRange(1, i + 1, s.getMaxRows(), 1).setNumberFormat('@');
   });
 }
 
@@ -182,12 +183,12 @@ function reparerDonnees() {
   try {
     Object.keys(FEUILLES).forEach((cle) => {
       const def = FEUILLES[cle];
-      const s = feuille(def);
+      const s = feuille_(def);
       const dernier = s.getLastRow();
-      appliquerFormatsTexte(def);
+      appliquerFormatsTexte_(def);
       if (dernier < 2) return;
       const zone = s.getRange(2, 1, dernier - 1, def.entetes.length);
-      const propres = zone.getValues().map((ligne) => ligne.map((v, c) => normaliserValeur(def.entetes[c], v)));
+      const propres = zone.getValues().map((ligne) => ligne.map((v, c) => normaliserValeur_(def.entetes[c], v)));
       zone.setValues(propres);
     });
     ui.alert('Données réparées. Vous pouvez rouvrir l\'application.');
@@ -196,51 +197,51 @@ function reparerDonnees() {
   }
 }
 
-function trouverParId(def, id) {
-  return versObjets(def).find((o) => String(o.id) === String(id)) || null;
+function trouverParId_(def, id) {
+  return versObjets_(def).find((o) => String(o.id) === String(id)) || null;
 }
 
-function inserer(def, objet) {
-  const s = feuille(def);
+function inserer_(def, objet) {
+  const s = feuille_(def);
   const id = objet.id || Utilities.getUuid();
-  const complet = Object.assign({ cree_le: nowIso() }, objet, { id });
+  const complet = Object.assign({ cree_le: nowIso_() }, objet, { id });
   const ligne = def.entetes.map((h) => (complet[h] === undefined ? '' : complet[h]));
-  ecrireLigne(s, s.getLastRow() + 1, def, ligne);
+  ecrireLigne_(s, s.getLastRow() + 1, def, ligne);
   return Object.assign({}, complet);
 }
 
-function mettreAJour(def, id, patch) {
-  const existant = trouverParId(def, id);
+function mettreAJour_(def, id, patch) {
+  const existant = trouverParId_(def, id);
   if (!existant) return null;
   const fusion = Object.assign({}, existant, patch, { id });
   delete fusion.__ligne;
   const ligne = def.entetes.map((h) => (fusion[h] === undefined ? '' : fusion[h]));
-  ecrireLigne(feuille(def), existant.__ligne, def, ligne);
+  ecrireLigne_(feuille_(def), existant.__ligne, def, ligne);
   return fusion;
 }
 
-function supprimerLigne(def, id) {
-  const existant = trouverParId(def, id);
+function supprimerLigne_(def, id) {
+  const existant = trouverParId_(def, id);
   if (!existant) return false;
-  feuille(def).deleteRow(existant.__ligne);
+  feuille_(def).deleteRow(existant.__ligne);
   return true;
 }
 
 /** Supprime toutes les lignes correspondant au filtre (utilisé pour les suppressions en cascade). */
-function supprimerToutesLignesOu(def, filtre) {
-  const s = feuille(def);
-  const correspondantes = versObjets(def).filter(filtre).sort((a, b) => b.__ligne - a.__ligne);
+function supprimerToutesLignesOu_(def, filtre) {
+  const s = feuille_(def);
+  const correspondantes = versObjets_(def).filter(filtre).sort((a, b) => b.__ligne - a.__ligne);
   correspondantes.forEach((o) => s.deleteRow(o.__ligne));
   return correspondantes.length;
 }
 
-function sansLigne(o) {
+function sansLigne_(o) {
   const c = Object.assign({}, o);
   delete c.__ligne;
   return c;
 }
 
-function nowIso() {
+function nowIso_() {
   return new Date().toISOString();
 }
 
@@ -249,7 +250,7 @@ function nowIso() {
  * ou un double pointage simultané ne créent deux lignes). À garder courte : ne jamais y
  * mettre un appel réseau (WhatsApp) qui bloquerait les autres utilisateurs pendant ce temps.
  */
-function avecVerrou(fn) {
+function avecVerrou_(fn) {
   const verrou = LockService.getScriptLock();
   verrou.waitLock(15000);
   try {

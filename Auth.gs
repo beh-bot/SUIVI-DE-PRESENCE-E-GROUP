@@ -6,16 +6,16 @@
 
 // ── Mots de passe (hachage SHA-256 salé ; pas de bcrypt disponible dans Apps Script) ──
 
-function hacherMotDePasse(motDePasse) {
+function hacherMotDePasse_(motDePasse) {
   const sel = Utilities.getUuid();
-  return { hash: sha256Hex(motDePasse + sel), sel };
+  return { hash: sha256Hex_(motDePasse + sel), sel };
 }
 
-function motDePasseValide(motDePasse, hashStocke, selStocke) {
-  return sha256Hex(String(motDePasse) + selStocke) === hashStocke;
+function motDePasseValide_(motDePasse, hashStocke, selStocke) {
+  return sha256Hex_(String(motDePasse) + selStocke) === hashStocke;
 }
 
-function sha256Hex(texte) {
+function sha256Hex_(texte) {
   const octets = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, texte, Utilities.Charset.UTF_8);
   return octets.map((o) => ('0' + ((o + 256) % 256).toString(16)).slice(-2)).join('');
 }
@@ -25,7 +25,7 @@ function sha256Hex(texte) {
 const DUREE_SESSION_MS = 12 * 60 * 60 * 1000;
 
 /** Supprime les sessions expirées : les propriétés du script ont une taille limitée, on évite qu'elles s'accumulent. */
-function purgerSessionsExpirees() {
+function purgerSessionsExpirees_() {
   const props = PropertiesService.getScriptProperties();
   const toutes = props.getProperties();
   Object.keys(toutes).forEach((cle) => {
@@ -38,8 +38,8 @@ function purgerSessionsExpirees() {
   });
 }
 
-function creerSession(utilisateur) {
-  purgerSessionsExpirees();
+function creerSession_(utilisateur) {
+  purgerSessionsExpirees_();
   const jeton = Utilities.getUuid();
   PropertiesService.getScriptProperties().setProperty(
     'session_' + jeton,
@@ -48,12 +48,12 @@ function creerSession(utilisateur) {
   return jeton;
 }
 
-function invaliderSession(jeton) {
+function invaliderSession_(jeton) {
   if (jeton) PropertiesService.getScriptProperties().deleteProperty('session_' + jeton);
 }
 
 /** Coupe toutes les sessions ouvertes d'un utilisateur (mot de passe changé, compte supprimé). */
-function invaliderSessionsUtilisateur(idUtilisateur, jetonAGarder) {
+function invaliderSessionsUtilisateur_(idUtilisateur, jetonAGarder) {
   const props = PropertiesService.getScriptProperties();
   const toutes = props.getProperties();
   Object.keys(toutes).forEach((cle) => {
@@ -68,7 +68,7 @@ function invaliderSessionsUtilisateur(idUtilisateur, jetonAGarder) {
 }
 
 /** Utilisateur courant, relu en base à CHAQUE appel : un compte supprimé ou un rôle changé prend effet immédiatement. */
-function utilisateurDuJeton(jeton) {
+function utilisateurDuJeton_(jeton) {
   if (!jeton) return null;
   const brut = PropertiesService.getScriptProperties().getProperty('session_' + jeton);
   if (!brut) return null;
@@ -79,23 +79,23 @@ function utilisateurDuJeton(jeton) {
     return null;
   }
   if (session.expire < Date.now()) {
-    invaliderSession(jeton);
+    invaliderSession_(jeton);
     return null;
   }
-  const u = trouverParId(FEUILLES.UTILISATEURS, session.id);
+  const u = trouverParId_(FEUILLES.UTILISATEURS, session.id);
   if (!u || !u.actif) return null;
   return { id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
 /** Lève 'SESSION_EXPIREE' (mot-clé que le navigateur reconnaît pour renvoyer vers l'écran de connexion). */
-function exigerConnexion(jeton) {
-  const u = utilisateurDuJeton(jeton);
+function exigerConnexion_(jeton) {
+  const u = utilisateurDuJeton_(jeton);
   if (!u) throw new Error('SESSION_EXPIREE');
   return u;
 }
 
-function exigerAdmin(jeton) {
-  const u = exigerConnexion(jeton);
+function exigerAdmin_(jeton) {
+  const u = exigerConnexion_(jeton);
   if (u.role !== 'admin') throw new Error("Cette action est réservée à l'administrateur.");
   return u;
 }
@@ -105,32 +105,32 @@ function exigerAdmin(jeton) {
 /** L'« identifiant » est stocké dans la colonne `email` (nom conservé pour ne pas casser les données existantes). */
 function connexion(identifiant, motDePasse) {
   const e = String(identifiant || '').trim().toLowerCase();
-  const u = versObjets(FEUILLES.UTILISATEURS).find((x) => String(x.email).toLowerCase() === e && x.actif);
-  if (!u || !motDePasseValide(motDePasse, u.mdp_hash, u.mdp_sel)) {
+  const u = versObjets_(FEUILLES.UTILISATEURS).find((x) => String(x.email).toLowerCase() === e && x.actif);
+  if (!u || !motDePasseValide_(motDePasse, u.mdp_hash, u.mdp_sel)) {
     throw new Error('Identifiant ou mot de passe incorrect.');
   }
-  const jeton = creerSession(u);
+  const jeton = creerSession_(u);
   return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
 function moi(jeton) {
-  return exigerConnexion(jeton);
+  return exigerConnexion_(jeton);
 }
 
 /** Un utilisateur connecté (encadreur ou administrateur) change son propre mot de passe. */
 function changerMonMotDePasse(jeton, ancien, nouveau) {
-  const courant = exigerConnexion(jeton);
-  const u = trouverParId(FEUILLES.UTILISATEURS, courant.id);
-  if (!u || !motDePasseValide(ancien, u.mdp_hash, u.mdp_sel)) throw new Error('Le mot de passe actuel est incorrect.');
-  motDePasseValideFormat(nouveau);
+  const courant = exigerConnexion_(jeton);
+  const u = trouverParId_(FEUILLES.UTILISATEURS, courant.id);
+  if (!u || !motDePasseValide_(ancien, u.mdp_hash, u.mdp_sel)) throw new Error('Le mot de passe actuel est incorrect.');
+  motDePasseValideFormat_(nouveau);
   if (String(nouveau) === String(ancien)) throw new Error("Le nouveau mot de passe doit être différent de l'actuel.");
-  const paire = hacherMotDePasse(String(nouveau));
-  mettreAJour(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel });
-  invaliderSessionsUtilisateur(u.id, jeton); // les autres appareils devront se reconnecter
+  const paire = hacherMotDePasse_(String(nouveau));
+  mettreAJour_(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel });
+  invaliderSessionsUtilisateur_(u.id, jeton); // les autres appareils devront se reconnecter
   return { ok: true };
 }
 
 function deconnexion(jeton) {
-  invaliderSession(jeton);
+  invaliderSession_(jeton);
   return { ok: true };
 }
