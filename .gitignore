@@ -1,0 +1,4 @@
+node_modules/
+# Identifiants de connexion de clasp : ne jamais les versionner
+.clasprc.json
+.env
