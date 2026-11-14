@@ -216,7 +216,11 @@ test('pointage : une seule ligne par élève, notification unique', () => {
   assert.strictEqual(l2.statut, 'absent');
   assert.strictEqual(l2.motif, 'Malade');
   assert.strictEqual(l2.notif_statut, 'envoye');
-  S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade (certificat)');
+  // Corriger le motif ne doit pas changer l'heure du pointage d'origine.
+  S.mettreAJour_(S.FEUILLES.PRESENCES, S.versObjets_(S.FEUILLES.PRESENCES)[0].id, { horodatage: '2026-11-16T08:31:00.000Z' });
+  const l3 = S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade (certificat)');
+  assert.strictEqual(l3.motif, 'Malade (certificat)');
+  assert.strictEqual(l3.horodatage, '2026-11-16T08:31:00.000Z');
   assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).length, 1);
   assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, 1);
   assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS)[0].tentatives, 1);

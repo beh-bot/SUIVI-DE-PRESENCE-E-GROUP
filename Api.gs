@@ -408,7 +408,9 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
   avecVerrou_(() => {
     const existante = versObjets_(FEUILLES.PRESENCES).find((p) => p.seance_id === seanceId && p.eleve_id === eleveId);
     const donnees = { seance_id: seanceId, eleve_id: eleveId, statut: statut, motif: motifNettoye, horodatage: nowIso_(), pointe_par: u.id };
-    if (existante) mettreAJour_(FEUILLES.PRESENCES, existante.id, donnees);
+    // Même statut qu'avant (on ne fait que corriger le motif) : l'heure et l'auteur du pointage d'origine sont conservés.
+    if (existante && existante.statut === statut) mettreAJour_(FEUILLES.PRESENCES, existante.id, { motif: motifNettoye });
+    else if (existante) mettreAJour_(FEUILLES.PRESENCES, existante.id, donnees);
     else inserer_(FEUILLES.PRESENCES, donnees);
   });
 
@@ -419,22 +421,24 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
 // ── Tableau de bord et export ─────────────────────────────────────────
 
 function aujourdhui_() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return Utilities.formatDate(new Date(), fuseauClasseur_(), 'yyyy-MM-dd');
 }
 
 function tableauDeBord(jeton, depuisIso) {
   exigerAdmin_(jeton);
-  const seances = versObjets_(FEUILLES.SEANCES);
+  if (depuisIso) dateIsoValide_(depuisIso, 'La date de début');
+  const seanceParId = {};
+  versObjets_(FEUILLES.SEANCES).forEach((s) => (seanceParId[s.id] = s));
   const presences = versObjets_(FEUILLES.PRESENCES).filter((p) => {
     if (!depuisIso) return true;
-    const s = seances.find((x) => x.id === p.seance_id);
+    const s = seanceParId[p.seance_id];
     return s && s.date_seance >= depuisIso;
   });
   const eleves = versObjets_(FEUILLES.ELEVES);
 
   const parClasse = {};
   presences.forEach((p) => {
-    const s = seances.find((x) => x.id === p.seance_id);
+    const s = seanceParId[p.seance_id];
     if (!s) return;
     if (!parClasse[s.classe]) parClasse[s.classe] = { classe: s.classe, presents: 0, total: 0 };
     parClasse[s.classe].total++;
@@ -514,7 +518,7 @@ function nomFichierSur_(texte) {
 function horodatageLisible_(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? String(iso) : Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+  return isNaN(d.getTime()) ? String(iso) : Utilities.formatDate(d, fuseauClasseur_(), 'dd/MM/yyyy HH:mm:ss');
 }
 
 function dateLisible_(iso) {
@@ -535,7 +539,7 @@ function htmlRapportPdf_(titre, infos, resume, colonnes, lignes) {
   const corps = lignes.length
     ? lignes.map((l, i) => `<tr style="background:${i % 2 ? '#FDF7EC' : '#FFFFFF'};">${l.map((c) => cellule(c, bord)).join('')}</tr>`).join('')
     : `<tr><td colspan="${colonnes.length}" style="${bord}text-align:center;color:#6E5A58;">Aucune donnée.</td></tr>`;
-  const maintenant = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
+  const maintenant = Utilities.formatDate(new Date(), fuseauClasseur_(), 'dd/MM/yyyy HH:mm');
   return '<!doctype html><html><head><meta charset="utf-8"></head>' +
     '<body style="font-family:Arial,Helvetica,sans-serif;color:#2B1818;margin:0;">' +
     `<table width="100%" cellspacing="0" cellpadding="0"><tr><td style="background:${COULEUR_ROUGE_FONCE};color:#FFFFFF;padding:12px 14px;">` +

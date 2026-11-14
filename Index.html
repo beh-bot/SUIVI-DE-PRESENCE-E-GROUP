@@ -348,7 +348,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const absents = d.plusAbsents.length
       ? `<h2 class="titre-section">Élèves les plus souvent absents</h2>
          <ul class="liste">${d.plusAbsents.map((e) => `
-           <li><a class="lien-ligne flex items-center justify-between gap-3" href="#/eleves/${e.id}">
+           <li><a class="lien-ligne flex items-center justify-between gap-3" href="#/eleves/${esc(e.id)}">
              <span><span class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</span><span class="block text-sm text-ardoise">${esc(e.classe)}</span></span>
              <span class="puce bg-absent-pale text-absent">${pluriel(e.absences, 'absence', 'absences')}</span>
            </a></li>`).join('')}</ul>` : '';
@@ -374,7 +374,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   // ── Écran : Séances ───────────────────────────────────────────────────
   function ligneSeance(s) {
     const restants = Math.max(s.attendus - s.presents - s.absents, 0);
-    return `<li><a href="#/seances/${s.id}" class="lien-ligne">
+    return `<li><a href="#/seances/${esc(s.id)}" class="lien-ligne">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0"><p class="truncate font-medium">${esc(s.matiere)}</p>
           <p class="text-sm text-ardoise">Classe ${esc(s.classe)}, ${esc(s.heure_debut)}${estAdmin() ? `, ${esc(s.enseignant_nom)}` : ''}</p></div>
@@ -429,7 +429,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         </div>
         <div><label class="etiquette" for="s-ens">Encadreur qui fera l'appel</label>
           <select class="champ" id="s-ens" name="enseignant_id">
-            ${comptesActifs.map((u) => `<option value="${u.id}" ${u.id === parDefaut ? 'selected' : ''}>${esc(u.nom)}${u.role === 'admin' ? ' (administrateur)' : ''}</option>`).join('')}
+            ${comptesActifs.map((u) => `<option value="${esc(u.id)}" ${u.id === parDefaut ? 'selected' : ''}>${esc(u.nom)}${u.role === 'admin' ? ' (administrateur)' : ''}</option>`).join('')}
           </select>
           ${comptesActifs.some((u) => u.role === 'enseignant') ? '' : '<p class="aide">Aucun encadreur pour le moment : créez son compte dans « Encadreurs ».</p>'}</div>
       </div>
@@ -447,15 +447,15 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     if (e.notif_statut === 'envoye') return `<span class="text-present">Message envoyé à ${esc(e.parent_nom)}.</span>`;
     if (e.notif_statut === 'en_attente') return `<span class="text-attente">Envoi du message au parent en cours…</span>`;
     if (e.notif_statut === 'echoue') return `<span class="text-absent">Message non envoyé : ${esc(e.notif_erreur)}</span>
-        <button type="button" data-action="renvoyer" data-notif="${e.notif_id}" class="btn btn-danger btn-petit mt-2 block">Renvoyer le message</button>`;
+        <button type="button" data-action="renvoyer" data-notif="${esc(e.notif_id)}" class="btn btn-danger btn-petit mt-2 block">Renvoyer le message</button>`;
     return '';
   }
   function htmlLigne(e) {
     const etat = e.statut || 'aucun';
     const bouton = (statut, libelle, actif, styleActif, styleInactif) => `
-      <button type="button" data-action="pointer" data-eleve="${e.id}" data-statut="${statut}" aria-pressed="${actif}"
+      <button type="button" data-action="pointer" data-eleve="${esc(e.id)}" data-statut="${statut}" aria-pressed="${actif}"
         class="btn-pointage ${actif ? styleActif : styleInactif}">${libelle}</button>`;
-    return `<li id="ligne-${e.id}" class="border-l-4 ${BORD[etat]} px-4 py-3">
+    return `<li id="ligne-${esc(e.id)}" class="border-l-4 ${BORD[etat]} px-4 py-3">
       <div class="flex items-baseline justify-between gap-3">
         <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
         <p class="shrink-0 text-xs text-ardoise">${e.horodatage ? `Pointé à ${fmtHeure(e.horodatage)}` : 'Pas encore pointé'}</p>
@@ -465,9 +465,9 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         ${bouton('absent', 'Absent', etat === 'absent', 'bg-absent text-white', 'border border-trait bg-white text-encre hover:bg-absent-pale')}
       </div>
       ${etat === 'absent' ? `<div class="mt-2">
-        <label class="sr-only" for="motif-${e.id}">Motif de l'absence</label>
-        <input id="motif-${e.id}" class="champ" data-motif="${e.id}" maxlength="200" autocomplete="off" placeholder="Motif de l'absence (facultatif)" value="${esc(e.motif)}">
-        <p id="notif-${e.id}" class="mt-2 text-sm">${htmlNotif(e)}</p></div>` : ''}
+        <label class="sr-only" for="motif-${esc(e.id)}">Motif de l'absence</label>
+        <input id="motif-${esc(e.id)}" class="champ" data-motif="${esc(e.id)}" maxlength="200" autocomplete="off" placeholder="Motif de l'absence (facultatif)" value="${esc(e.motif)}">
+        <p id="notif-${esc(e.id)}" class="mt-2 text-sm">${htmlNotif(e)}</p></div>` : ''}
     </li>`;
   }
   function htmlResume(eleves) {
@@ -495,18 +495,18 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       ${corps}
       <h2 class="titre-section">${estAdmin() ? 'Exporter et gérer' : 'Exporter'}</h2>
       <div class="flex flex-wrap gap-2">
-        <button type="button" data-action="exporter-pdf-seance" data-id="${s.id}" class="btn btn-primaire">Exporter en PDF</button>
-        ${estAdmin() ? `<button type="button" data-action="exporter-csv" data-id="${s.id}" class="btn btn-secondaire">Exporter en CSV</button>
-        <button type="button" data-action="supprimer-seance" data-id="${s.id}" class="btn btn-danger">Supprimer la séance</button>` : ''}
+        <button type="button" data-action="exporter-pdf-seance" data-id="${esc(s.id)}" class="btn btn-primaire">Exporter en PDF</button>
+        ${estAdmin() ? `<button type="button" data-action="exporter-csv" data-id="${esc(s.id)}" class="btn btn-secondaire">Exporter en CSV</button>
+        <button type="button" data-action="supprimer-seance" data-id="${esc(s.id)}" class="btn btn-danger">Supprimer la séance</button>` : ''}
       </div>` };
   }
 
   function remplacerLigne(e, focusStatut) {
-    const li = $(`#ligne-${e.id}`);
+    const li = $(`#ligne-${esc(e.id)}`);
     if (!li) return;
     li.outerHTML = htmlLigne(e);
     if (pt) $('#resume').innerHTML = htmlResume(pt.eleves);
-    if (focusStatut) $(`#ligne-${e.id} [data-statut="${focusStatut}"]`)?.focus();
+    if (focusStatut) $(`#ligne-${esc(e.id)} [data-statut="${focusStatut}"]`)?.focus();
   }
 
   const pointagesEnCours = new Set();
@@ -567,9 +567,9 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
           <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
           <p class="text-sm text-ardoise">Parent : ${esc(e.parent_nom)}, ${esc(e.parent_whatsapp)}</p>
           <div class="mt-2 flex flex-wrap gap-2">
-            <a href="#/eleves/${e.id}" class="btn btn-secondaire btn-petit">Voir l'historique</a>
-            <button type="button" data-action="modifier-eleve" data-id="${e.id}" class="btn btn-secondaire btn-petit">Modifier</button>
-            <button type="button" data-action="supprimer-eleve" data-id="${e.id}" class="btn btn-danger btn-petit">Supprimer</button>
+            <a href="#/eleves/${esc(e.id)}" class="btn btn-secondaire btn-petit">Voir l'historique</a>
+            <button type="button" data-action="modifier-eleve" data-id="${esc(e.id)}" class="btn btn-secondaire btn-petit">Modifier</button>
+            <button type="button" data-action="supprimer-eleve" data-id="${esc(e.id)}" class="btn btn-danger btn-petit">Supprimer</button>
           </div></li>`).join('')}</ul>`).join('');
   }
   let listeElevesCourante = [];
@@ -589,7 +589,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const [classes, eleve] = await Promise.all([api('listerClasses'), id ? api('historiqueEleve', id).then((h) => h.eleve) : Promise.resolve(null)]);
     const champ = (nom, libelle, valeur, extra = '') => `<div><label class="etiquette" for="e-${nom}">${libelle}</label>
       <input class="champ" id="e-${nom}" name="${nom}" required autocomplete="off" value="${esc(valeur)}" ${extra}></div>`;
-    ouvrirModale(`<form data-form="eleve" data-id="${eleve ? eleve.id : ''}" class="p-5" novalidate>
+    ouvrirModale(`<form data-form="eleve" data-id="${esc(eleve ? eleve.id : '')}" class="p-5" novalidate>
       <h2 class="text-lg font-semibold">${eleve ? "Modifier l'élève" : 'Nouvel élève'}</h2>
       <div class="mt-4 space-y-3">
         <div class="grid gap-3 sm:grid-cols-2">${champ('nom', 'Nom', eleve?.nom)}${champ('prenom', 'Prénom', eleve?.prenom)}</div>
@@ -612,7 +612,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const e = h.eleve;
     const lignes = h.pointages.length
       ? `<ul class="liste">${h.pointages.map((p) => `
-          <li><a href="#/seances/${p.seance_id}" class="lien-ligne">
+          <li><a href="#/seances/${esc(p.seance_id)}" class="lien-ligne">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0"><p class="font-medium">${esc(p.matiere)}</p>
                 <p class="text-sm text-ardoise">${esc(fmtDateLongue(p.date_seance))} à ${esc(p.heure_debut)}</p>
@@ -629,7 +629,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <dl class="mt-4 grid grid-cols-3 divide-x divide-trait rounded-xl border border-trait bg-white text-center">
         ${stat(h.presences, 'Présences', 'text-present')}${stat(h.absences, 'Absences', h.absences ? 'text-absent' : '')}${stat(h.taux === null ? '–' : `${h.taux} %`, 'Taux de présence')}
       </dl>
-      <div class="mt-4"><button type="button" data-action="exporter-pdf-eleve" data-id="${e.id}" class="btn btn-primaire">Exporter le relevé en PDF</button></div>
+      <div class="mt-4"><button type="button" data-action="exporter-pdf-eleve" data-id="${esc(e.id)}" class="btn btn-primaire">Exporter le relevé en PDF</button></div>
       <h2 class="titre-section">Détail des pointages</h2>${lignes}` };
   }
 
@@ -647,8 +647,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         <span class="puce shrink-0 ${c.role === 'admin' ? 'puce-jaune' : 'bg-papier text-encre'}">${LIBELLE_ROLE[c.role]}</span>
       </div>
       <div class="mt-2 flex flex-wrap gap-2">
-        <button type="button" data-action="modifier-utilisateur" data-id="${c.id}" class="btn btn-secondaire btn-petit">Modifier</button>
-        ${c.id !== utilisateur.id ? `<button type="button" data-action="supprimer-utilisateur" data-id="${c.id}" class="btn btn-danger btn-petit">Supprimer le compte</button>` : ''}
+        <button type="button" data-action="modifier-utilisateur" data-id="${esc(c.id)}" class="btn btn-secondaire btn-petit">Modifier</button>
+        ${c.id !== utilisateur.id ? `<button type="button" data-action="supprimer-utilisateur" data-id="${esc(c.id)}" class="btn btn-danger btn-petit">Supprimer le compte</button>` : ''}
       </div></li>`;
     return { html: `
       <div class="flex items-center justify-between gap-3">
@@ -673,7 +673,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
             ${i.lien ? `<button type="button" data-action="copier" data-message="Lien copié." data-texte="${esc(i.lien)}" class="btn btn-secondaire btn-petit">Copier le lien</button>
             <a href="${esc(lienWhatsApp(i.lien))}" target="_blank" rel="noopener" class="btn btn-secondaire btn-petit">WhatsApp</a>`
               : `<p class="w-full break-all text-xs text-ardoise">Ajoutez <strong>?invitation=${esc(i.id)}</strong> à la fin de l'adresse de l'application.</p>`}
-            <button type="button" data-action="revoquer-invitation" data-id="${i.id}" class="btn btn-danger btn-petit">Annuler</button>
+            <button type="button" data-action="revoquer-invitation" data-id="${esc(i.id)}" class="btn btn-danger btn-petit">Annuler</button>
           </div></li>`).join('')}</ul>` : ''}` };
   }
 
@@ -684,7 +684,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   }
   function ouvrirFormUtilisateur(compte) {
     const soiMeme = compte && compte.id === utilisateur.id;
-    ouvrirModale(`<form data-form="utilisateur" data-id="${compte ? compte.id : ''}" class="p-5" novalidate>
+    ouvrirModale(`<form data-form="utilisateur" data-id="${esc(compte ? compte.id : '')}" class="p-5" novalidate>
       <h2 class="text-lg font-semibold">${compte ? 'Modifier le compte' : 'Nouveau compte'}</h2>
       <div class="mt-4 space-y-3">
         <div><label class="etiquette" for="u-nom">Nom complet</label><input class="champ" id="u-nom" name="nom" required autocomplete="off" value="${esc(compte?.nom)}"></div>
@@ -777,11 +777,11 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   function ouvrirReattribution(compte, nbSeances) {
     const autres = comptes.filter((c) => c.id !== compte.id);
     const parDefaut = (autres.find((c) => c.role === 'enseignant') || autres[0]).id;
-    ouvrirModale(`<form data-form="reattribuer" data-id="${compte.id}" class="p-5" novalidate>
+    ouvrirModale(`<form data-form="reattribuer" data-id="${esc(compte.id)}" class="p-5" novalidate>
       <h2 class="text-lg font-semibold">Qui reprend les séances ?</h2>
       <p class="mt-2 text-sm text-ardoise">${esc(compte.nom)} a ${pluriel(nbSeances, 'séance attribuée', 'séances attribuées')}. Elles seront transférées, et l'historique des pointages est conservé.</p>
       <div class="mt-4"><label class="etiquette" for="r-qui">Nouvel encadreur responsable</label>
-        <select class="champ" id="r-qui" name="reassigner_a">${autres.map((c) => `<option value="${c.id}" ${c.id === parDefaut ? 'selected' : ''}>${esc(c.nom)}${c.role === 'admin' ? ' (administrateur)' : ''}</option>`).join('')}</select></div>
+        <select class="champ" id="r-qui" name="reassigner_a">${autres.map((c) => `<option value="${esc(c.id)}" ${c.id === parDefaut ? 'selected' : ''}>${esc(c.nom)}${c.role === 'admin' ? ' (administrateur)' : ''}</option>`).join('')}</select></div>
       <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
       <div class="mt-5 flex justify-end gap-2">
         <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
@@ -796,16 +796,16 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const lignes = await api('listerNotifications', statut || null);
     const onglet = (v, l) => `<a href="#/messages${v ? `?statut=${v}` : ''}" ${statut === v ? 'aria-current="true"' : ''} class="btn btn-petit ${statut === v ? 'btn-primaire' : 'btn-secondaire'}">${l}</a>`;
     const liste = lignes.length
-      ? `<ul class="liste">${lignes.map((n) => { const [libelle, style] = STATUTS_MSG[n.statut]; return `<li class="px-4 py-3">
+      ? `<ul class="liste">${lignes.map((n) => { const [libelle, style] = STATUTS_MSG[n.statut] || [n.statut, 'bg-papier text-ardoise']; return `<li class="px-4 py-3">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0"><p class="font-medium">${esc(n.nom)} ${esc(n.prenom)}</p>
               <p class="text-sm text-ardoise">Parent : ${esc(n.parent_nom)}, ${esc(n.telephone)}</p>
               <p class="text-sm text-ardoise">${esc(n.matiere)}, ${esc(fmtDateCourte(n.date_seance))} à ${esc(n.heure_debut)}</p></div>
-            <span class="puce shrink-0 ${style}">${libelle}</span>
+            <span class="puce shrink-0 ${style}">${esc(libelle)}</span>
           </div>
           ${n.erreur ? `<p class="mt-2 rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent">${esc(n.erreur)}</p>` : ''}
           <p class="mt-1 text-xs text-ardoise">Mis à jour le ${esc(fmtHorodatage(n.maj_le))}, ${pluriel(n.tentatives, 'tentative', 'tentatives')}</p>
-          ${n.statut === 'echoue' ? `<button type="button" data-action="renvoyer" data-notif="${n.id}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
+          ${n.statut === 'echoue' ? `<button type="button" data-action="renvoyer" data-notif="${esc(n.id)}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
         </li>`; }).join('')}</ul>`
       : carteVide('Aucun message', statut ? 'Aucun message dans cette catégorie.' : "Les messages envoyés aux parents apparaîtront ici dès la première absence.");
     return { html: `
@@ -906,7 +906,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     },
     async seance(donnees) {
       const s = await api('creerSeance', donnees);
-      modale.close(); location.hash = `#/seances/${s.id}`;
+      modale.close(); location.hash = `#/seances/${esc(s.id)}`;
     },
     async utilisateur(donnees, form) {
       const id = form.dataset.id;
