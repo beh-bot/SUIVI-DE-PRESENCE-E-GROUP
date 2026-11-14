@@ -52,7 +52,7 @@ Il faut Node.js installé. Depuis la racine du dépôt :
 node tests/simulation.cjs
 ```
 
-Le résultat attendu se termine par `17 tests réussis.`. Au premier échec, le test s'arrête et affiche la vérification qui a échoué.
+Le résultat attendu se termine par une ligne du type `22 tests réussis.` (le nombre augmente avec les fiches suivantes). Au premier échec, le test s'arrête et affiche la vérification qui a échoué.
 
 L'extension est `.cjs` et non `.js` pour que Node traite toujours ces fichiers de la même façon, quel que soit le dossier où le dépôt est rangé.
 

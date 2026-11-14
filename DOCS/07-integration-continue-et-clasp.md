@@ -50,7 +50,7 @@ Quatre fichiers ont été ajoutés :
 | Fichier | Rôle |
 |---|---|
 | `appsscript.json` | Le manifeste du projet, désormais versionné |
-| `.claspignore` | La liste des seuls fichiers à envoyer : le manifeste, les cinq `.gs` et `Index.html` |
+| `.claspignore` | La liste des seuls fichiers à envoyer : le manifeste, les fichiers `.gs` et `Index.html` |
 | `.clasp.json.example` | Un modèle du fichier qui désigne le projet Apps Script visé |
 | `.gitignore` | Écarte `.clasp.json` et `.clasprc.json` du dépôt |
 
@@ -117,7 +117,7 @@ Trois points à retenir :
 
 ## Comment vérifier
 
-- En local : `npm test` doit se terminer par `17 tests réussis.`
+- En local : `npm test` doit se terminer par une ligne `… tests réussis.`, sans le mot ÉCHEC
 - Sur GitHub : onglet **Actions** du dépôt, ou la coche à côté du dernier commit de `develop`.
 
 ## Questions possibles du jury

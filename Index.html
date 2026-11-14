@@ -279,6 +279,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     [/^#\/eleves\/([\w-]+)$/, 'eleves', vueHistorique],
     [/^#\/enseignants$/, 'enseignants', vueEnseignants],
     [/^#\/messages(?:\?(.*))?$/, 'messages', vueMessages],
+    [/^#\/corbeille$/, 'eleves', vueCorbeille],
   ];
 
   async function router() {
@@ -407,7 +408,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         ${admin ? '<button type="button" data-action="nouvelle-seance" class="btn btn-primaire">Créer une séance</button>' : ''}
       </div>
       ${admin ? '' : '<p class="text-ardoise">Touchez une séance pour faire l\'appel : Présent ou Absent.</p>'}
-      ${liste}` };
+      ${liste}
+      ${admin ? LIEN_CORBEILLE : ''}` };
   }
 
   async function ouvrirFormSeance() {
@@ -582,7 +584,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div>
       <div class="mt-4"><label class="sr-only" for="recherche">Rechercher un élève</label>
         <input id="recherche" data-input="recherche" type="search" class="champ" placeholder="Rechercher par nom ou prénom" value="${esc(filtreElevesTexte)}"></div>
-      <div id="liste-eleves">${htmlListeEleves(listeElevesCourante)}</div>` };
+      <div id="liste-eleves">${htmlListeEleves(listeElevesCourante)}</div>
+      ${LIEN_CORBEILLE}` };
   }
 
   async function ouvrirFormEleve(id) {
@@ -625,6 +628,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     return { html: `
       <a href="#/eleves" class="text-sm text-ardoise underline">Retour aux élèves</a>
       <h1 class="titre-page mt-2">${esc(e.nom)} ${esc(e.prenom)}</h1>
+      ${e.supprime_le ? `<p class="mt-2 rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent">Cet élève est dans la corbeille : il n'apparaît plus à l'appel. <a href="#/corbeille" class="underline">Ouvrir la corbeille</a></p>` : ''}
       <p class="text-ardoise">Classe ${esc(e.classe)}. Parent : ${esc(e.parent_nom)}, ${esc(e.parent_whatsapp)}</p>
       <dl class="mt-4 grid grid-cols-3 divide-x divide-trait rounded-xl border border-trait bg-white text-center">
         ${stat(h.presences, 'Présences', 'text-present')}${stat(h.absences, 'Absences', h.absences ? 'text-absent' : '')}${stat(h.taux === null ? '–' : `${h.taux} %`, 'Taux de présence')}
@@ -789,6 +793,37 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div></form>`);
   }
 
+  // ── Écran : Corbeille (élèves et séances retirés, rétablissables) ─────
+  const LIEN_CORBEILLE = '<p class="mt-6 text-sm"><a href="#/corbeille" class="text-ardoise underline">Corbeille : élèves et séances supprimés</a></p>';
+  async function vueCorbeille() {
+    const c = await api('listerCorbeille');
+    const boutons = (type, id) => `<div class="mt-2 flex flex-wrap gap-2">
+        <button type="button" data-action="restaurer-${type}" data-id="${esc(id)}" class="btn btn-secondaire btn-petit">Rétablir</button>
+        <button type="button" data-action="effacer-${type}" data-id="${esc(id)}" class="btn btn-danger btn-petit">Supprimer définitivement</button>
+      </div>`;
+    const quand = (o) => `Supprimé le ${esc(fmtHorodatage(o.supprime_le))}, ${pluriel(o.nb_pointages, 'pointage conservé', 'pointages conservés')}`;
+    const eleves = c.eleves.length
+      ? `<ul class="liste">${c.eleves.map((e) => `<li class="px-4 py-3">
+          <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
+          <p class="text-sm text-ardoise">Classe ${esc(e.classe)}</p>
+          <p class="text-xs text-ardoise">${quand(e)}</p>
+          ${boutons('eleve', e.id)}</li>`).join('')}</ul>`
+      : carteVide('Aucun élève dans la corbeille', 'Un élève supprimé arrive ici, avec tout son historique.');
+    const seances = c.seances.length
+      ? `<ul class="liste">${c.seances.map((s) => `<li class="px-4 py-3">
+          <p class="font-medium">${esc(s.matiere)}</p>
+          <p class="text-sm text-ardoise">Classe ${esc(s.classe)}, ${esc(fmtDateCourte(s.date_seance))} à ${esc(s.heure_debut)}</p>
+          <p class="text-xs text-ardoise">${quand(s)}</p>
+          ${boutons('seance', s.id)}</li>`).join('')}</ul>`
+      : carteVide('Aucune séance dans la corbeille', 'Une séance supprimée arrive ici, avec ses pointages.');
+    return { html: `
+      <a href="#/eleves" class="text-sm text-ardoise underline">Retour aux élèves</a>
+      <h1 class="titre-page mt-2">Corbeille</h1>
+      <p class="text-ardoise">Ce qui est ici n'apparaît plus dans l'application, mais rien n'est perdu : vous pouvez le rétablir. « Supprimer définitivement » efface aussi les pointages et ne peut pas être annulé.</p>
+      <h2 class="titre-section">Élèves</h2>${eleves}
+      <h2 class="titre-section">Séances</h2>${seances}` };
+  }
+
   // ── Écran : Messages ──────────────────────────────────────────────────
   const STATUTS_MSG = { envoye: ['Envoyé', 'bg-present-pale text-present'], echoue: ['Échoué', 'bg-absent-pale text-absent'], en_attente: ['En cours', 'bg-attente-pale text-attente'] };
   async function vueMessages(requete = '') {
@@ -859,14 +894,30 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       } catch (e) { gererErreur(e); }
     },
     'supprimer-eleve': async (el) => {
-      const ok = await confirmer({ titre: 'Supprimer cet élève ?', message: 'Ses présences et les messages associés seront aussi supprimés. Cette action est définitive.', bouton: "Supprimer l'élève", danger: true });
+      const ok = await confirmer({ titre: 'Supprimer cet élève ?', message: "Il n'apparaîtra plus dans les listes ni à l'appel. Son historique est conservé : vous pourrez le rétablir depuis la corbeille.", bouton: "Supprimer l'élève", danger: true });
       if (!ok) return;
-      try { await api('supprimerEleve', el.dataset.id); toast('Élève supprimé.', 'succes'); router(); } catch (e) { gererErreur(e); }
+      try { await api('supprimerEleve', el.dataset.id); toast('Élève placé dans la corbeille.', 'succes'); router(); } catch (e) { gererErreur(e); }
     },
     'supprimer-seance': async (el) => {
-      const ok = await confirmer({ titre: 'Supprimer cette séance ?', message: 'Tous les pointages de la séance seront supprimés. Cette action est définitive.', bouton: 'Supprimer la séance', danger: true });
+      const ok = await confirmer({ titre: 'Supprimer cette séance ?', message: 'Elle disparaîtra des listes et ses pointages ne compteront plus. Vous pourrez la rétablir depuis la corbeille.', bouton: 'Supprimer la séance', danger: true });
       if (!ok) return;
-      try { await api('supprimerSeance', el.dataset.id); toast('Séance supprimée.', 'succes'); location.hash = '#/seances'; } catch (e) { gererErreur(e); }
+      try { await api('supprimerSeance', el.dataset.id); toast('Séance placée dans la corbeille.', 'succes'); location.hash = '#/seances'; } catch (e) { gererErreur(e); }
+    },
+    'restaurer-eleve': async (el) => {
+      try { await api('restaurerEleve', el.dataset.id); toast('Élève rétabli.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'restaurer-seance': async (el) => {
+      try { await api('restaurerSeance', el.dataset.id); toast('Séance rétablie.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'effacer-eleve': async (el) => {
+      const ok = await confirmer({ titre: 'Supprimer définitivement cet élève ?', message: 'Ses pointages et les messages associés seront effacés. Cette action ne peut pas être annulée.', bouton: 'Supprimer définitivement', danger: true });
+      if (!ok) return;
+      try { await api('supprimerEleveDefinitivement', el.dataset.id); toast('Élève supprimé définitivement.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'effacer-seance': async (el) => {
+      const ok = await confirmer({ titre: 'Supprimer définitivement cette séance ?', message: 'Tous ses pointages et les messages associés seront effacés. Cette action ne peut pas être annulée.', bouton: 'Supprimer définitivement', danger: true });
+      if (!ok) return;
+      try { await api('supprimerSeanceDefinitivement', el.dataset.id); toast('Séance supprimée définitivement.', 'succes'); router(); } catch (e) { gererErreur(e); }
     },
     'supprimer-utilisateur': async (el) => {
       const c = comptes.find((x) => x.id === el.dataset.id);

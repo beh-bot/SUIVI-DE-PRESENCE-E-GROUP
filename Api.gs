@@ -152,7 +152,7 @@ function accepterInvitation(id, champs) {
 
 function listerUtilisateurs(jeton) {
   exigerAdmin_(jeton);
-  const seances = versObjets_(FEUILLES.SEANCES);
+  const seances = actifs_(FEUILLES.SEANCES);
   return versObjets_(FEUILLES.UTILISATEURS)
     .filter((u) => u.actif)
     .map((u) => ({
@@ -211,14 +211,15 @@ function supprimerUtilisateur(jeton, id, reassignerA) {
     const u = trouverParId_(FEUILLES.UTILISATEURS, id);
     if (!u || !u.actif) throw new Error('Compte introuvable.');
 
-    const seances = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
+    const toutes = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
+    const seances = toutes.filter((s) => !s.supprime_le); // celles de la corbeille n'obligent pas à choisir un repreneur
     if (seances.length && !reassignerA) {
       return { ok: false, code: 'SEANCES_ATTRIBUEES', nb_seances: seances.length };
     }
-    if (seances.length) {
+    if (reassignerA && toutes.length) {
       const repreneur = trouverParId_(FEUILLES.UTILISATEURS, reassignerA);
       if (!repreneur || !repreneur.actif || reassignerA === id) throw new Error('Le repreneur choisi est invalide.');
-      seances.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
+      toutes.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
     }
     mettreAJour_(FEUILLES.UTILISATEURS, id, { actif: false, email: `supprime-${id}-${u.email}` });
     return { ok: true, seances_reattribuees: seances.length };
@@ -231,15 +232,15 @@ function supprimerUtilisateur(jeton, id, reassignerA) {
 
 function listerEleves(jeton) {
   exigerAdmin_(jeton);
-  return versObjets_(FEUILLES.ELEVES)
+  return actifs_(FEUILLES.ELEVES)
     .map(sansLigne_)
     .sort((a, b) => a.classe.localeCompare(b.classe) || a.nom.localeCompare(b.nom));
 }
 
 function listerClasses(jeton) {
   exigerConnexion_(jeton);
-  const c1 = versObjets_(FEUILLES.ELEVES).map((e) => e.classe);
-  const c2 = versObjets_(FEUILLES.SEANCES).map((s) => s.classe);
+  const c1 = actifs_(FEUILLES.ELEVES).map((e) => e.classe);
+  const c2 = actifs_(FEUILLES.SEANCES).map((s) => s.classe);
   const toutes = {};
   c1.concat(c2).forEach((c) => (toutes[c] = true));
   return Object.keys(toutes).sort();
@@ -262,30 +263,84 @@ function creerEleve(jeton, champs) {
 
 function modifierEleve(jeton, id, champs) {
   exigerAdmin_(jeton);
-  const maj = mettreAJour_(FEUILLES.ELEVES, id, validerEleve_(champs));
+  const donnees = validerEleve_(champs);
+  const maj = avecVerrou_(() => (trouverActifParId_(FEUILLES.ELEVES, id) ? mettreAJour_(FEUILLES.ELEVES, id, donnees) : null));
   if (!maj) throw new Error('Élève introuvable.');
   return sansLigne_(maj);
 }
 
+/**
+ * « Supprimer » un élève le place dans la corbeille : il disparaît des listes et de l'appel, mais
+ * ses pointages restent, et les anciennes feuilles de présence ne changent pas. L'effacement réel
+ * se fait depuis la corbeille (supprimerEleveDefinitivement).
+ */
 function supprimerEleve(jeton, id) {
   exigerAdmin_(jeton);
+  mettreALaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable.');
+  return { ok: true };
+}
+
+function restaurerEleve(jeton, id) {
+  exigerAdmin_(jeton);
+  sortirDeLaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable dans la corbeille.');
+  return { ok: true };
+}
+
+/** Efface pour de bon un élève de la corbeille, avec ses pointages et ses messages. Irréversible. */
+function supprimerEleveDefinitivement(jeton, id) {
+  exigerAdmin_(jeton);
   avecVerrou_(() => {
-    if (!supprimerLigne_(FEUILLES.ELEVES, id)) throw new Error('Élève introuvable.');
+    const e = trouverParId_(FEUILLES.ELEVES, id);
+    if (!e || !e.supprime_le) throw new Error("Élève introuvable dans la corbeille. Placez-le d'abord dans la corbeille.");
+    supprimerLigne_(FEUILLES.ELEVES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.eleve_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.eleve_id === id);
   });
   return { ok: true };
 }
 
+// ── Corbeille (élèves et séances) ───────────────────────────────────
+
+function mettreALaCorbeille_(def, id, messageIntrouvable) {
+  avecVerrou_(() => {
+    if (!trouverActifParId_(def, id)) throw new Error(messageIntrouvable);
+    mettreAJour_(def, id, { supprime_le: nowIso_() });
+  });
+}
+
+function sortirDeLaCorbeille_(def, id, messageIntrouvable) {
+  avecVerrou_(() => {
+    const o = trouverParId_(def, id);
+    if (!o || !o.supprime_le) throw new Error(messageIntrouvable);
+    mettreAJour_(def, id, { supprime_le: '' });
+  });
+}
+
+function listerCorbeille(jeton) {
+  exigerAdmin_(jeton);
+  const recentD_abord = (a, b) => String(b.supprime_le).localeCompare(String(a.supprime_le));
+  const presences = versObjets_(FEUILLES.PRESENCES);
+  return {
+    eleves: versObjets_(FEUILLES.ELEVES).filter((e) => e.supprime_le).sort(recentD_abord).map((e) => ({
+      id: e.id, nom: e.nom, prenom: e.prenom, classe: e.classe, supprime_le: e.supprime_le,
+      nb_pointages: presences.filter((p) => p.eleve_id === e.id).length,
+    })),
+    seances: versObjets_(FEUILLES.SEANCES).filter((s) => s.supprime_le).sort(recentD_abord).map((s) => ({
+      id: s.id, matiere: s.matiere, classe: s.classe, date_seance: s.date_seance, heure_debut: s.heure_debut, supprime_le: s.supprime_le,
+      nb_pointages: presences.filter((p) => p.seance_id === s.id).length,
+    })),
+  };
+}
+
 function historiqueEleve(jeton, id) {
   exigerAdmin_(jeton);
-  const eleve = trouverParId_(FEUILLES.ELEVES, id);
+  const eleve = trouverParId_(FEUILLES.ELEVES, id); // un élève de la corbeille reste consultable
   if (!eleve) throw new Error('Élève introuvable.');
-  const seances = versObjets_(FEUILLES.SEANCES);
+  const seances = actifs_(FEUILLES.SEANCES);
   const pointages = versObjets_(FEUILLES.PRESENCES)
-    .filter((p) => p.eleve_id === id)
+    .filter((p) => p.eleve_id === id && seances.some((x) => x.id === p.seance_id)) // sans les séances de la corbeille
     .map((p) => {
-      const s = seances.find((x) => x.id === p.seance_id) || {};
+      const s = seances.find((x) => x.id === p.seance_id);
       return {
         seance_id: p.seance_id, matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut,
         statut: p.statut, motif: p.motif, horodatage: p.horodatage,
@@ -303,7 +358,7 @@ function historiqueEleve(jeton, id) {
 // ── Séances ───────────────────────────────────────────────────────────
 
 function chargerSeanceAvecEnseignant_(id) {
-  const s = trouverParId_(FEUILLES.SEANCES, id);
+  const s = trouverActifParId_(FEUILLES.SEANCES, id); // une séance de la corbeille est inaccessible tant qu'elle n'est pas rétablie
   if (!s) throw new Error('Séance introuvable.');
   const ens = trouverParId_(FEUILLES.UTILISATEURS, s.enseignant_id);
   return Object.assign(sansLigne_(s), { enseignant_nom: ens ? ens.nom : '(compte supprimé)' });
@@ -320,7 +375,7 @@ function listerSeances(jeton, filtres) {
   const utilisateurs = versObjets_(FEUILLES.UTILISATEURS);
   const presences = versObjets_(FEUILLES.PRESENCES);
   const eleves = versObjets_(FEUILLES.ELEVES);
-  return versObjets_(FEUILLES.SEANCES)
+  return actifs_(FEUILLES.SEANCES)
     .filter((s) => u.role === 'admin' || s.enseignant_id === u.id)
     .filter((s) => !filtres.date || s.date_seance === filtres.date)
     .filter((s) => !filtres.classe || s.classe === filtres.classe)
@@ -329,7 +384,7 @@ function listerSeances(jeton, filtres) {
       const pts = presences.filter((p) => p.seance_id === s.id);
       return Object.assign(sansLigne_(s), {
         enseignant_nom: ens ? ens.nom : '(compte supprimé)',
-        attendus: eleves.filter((e) => e.classe === s.classe).length,
+        attendus: eleves.filter((e) => e.classe === s.classe && attenduALaSeance_(e, pts)).length,
         presents: pts.filter((p) => p.statut === 'present').length,
         absents: pts.filter((p) => p.statut === 'absent').length,
       });
@@ -353,10 +408,26 @@ function creerSeance(jeton, champs) {
   return chargerSeanceAvecEnseignant_(s.id);
 }
 
+/** « Supprimer » une séance la place dans la corbeille : ses pointages sont conservés mais ne comptent plus. */
 function supprimerSeance(jeton, id) {
   exigerAdmin_(jeton);
+  mettreALaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable.');
+  return { ok: true };
+}
+
+function restaurerSeance(jeton, id) {
+  exigerAdmin_(jeton);
+  sortirDeLaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable dans la corbeille.');
+  return { ok: true };
+}
+
+/** Efface pour de bon une séance de la corbeille, avec ses pointages et ses messages. Irréversible. */
+function supprimerSeanceDefinitivement(jeton, id) {
+  exigerAdmin_(jeton);
   avecVerrou_(() => {
-    if (!supprimerLigne_(FEUILLES.SEANCES, id)) throw new Error('Séance introuvable.');
+    const s = trouverParId_(FEUILLES.SEANCES, id);
+    if (!s || !s.supprime_le) throw new Error("Séance introuvable dans la corbeille. Placez-la d'abord dans la corbeille.");
+    supprimerLigne_(FEUILLES.SEANCES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.seance_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.seance_id === id);
   });
@@ -365,9 +436,17 @@ function supprimerSeance(jeton, id) {
 
 // ── Pointage ──────────────────────────────────────────────────────────
 
+/**
+ * Un élève figure sur la feuille d'une séance s'il est actif, ou s'il est dans la corbeille mais
+ * a été pointé à cette séance : retirer un élève ne modifie pas les feuilles de présence passées.
+ */
+function attenduALaSeance_(eleve, presencesDeLaSeance) {
+  return !eleve.supprime_le || presencesDeLaSeance.some((p) => p.eleve_id === eleve.id);
+}
+
 function lignesPointage_(seance) {
-  const eleves = versObjets_(FEUILLES.ELEVES).filter((e) => e.classe === seance.classe);
   const presences = versObjets_(FEUILLES.PRESENCES).filter((p) => p.seance_id === seance.id);
+  const eleves = versObjets_(FEUILLES.ELEVES).filter((e) => e.classe === seance.classe && attenduALaSeance_(e, presences));
   const notifs = versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === seance.id);
   return eleves
     .map((e) => {
@@ -400,7 +479,7 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
   const seance = chargerSeanceAvecEnseignant_(seanceId);
   verifierAccesSeance_(seance, u);
   if (statut !== 'present' && statut !== 'absent') throw new Error('Le statut doit être « present » ou « absent ».');
-  const eleve = trouverParId_(FEUILLES.ELEVES, eleveId);
+  const eleve = trouverActifParId_(FEUILLES.ELEVES, eleveId);
   if (!eleve) throw new Error('Élève introuvable.');
   if (eleve.classe !== seance.classe) throw new Error("Cet élève n'appartient pas à la classe de la séance.");
   const motifNettoye = statut === 'absent' && motif ? texteRequis_(motif, 'Le motif', 200) : '';
@@ -428,13 +507,15 @@ function tableauDeBord(jeton, depuisIso) {
   exigerAdmin_(jeton);
   if (depuisIso) dateIsoValide_(depuisIso, 'La date de début');
   const seanceParId = {};
-  versObjets_(FEUILLES.SEANCES).forEach((s) => (seanceParId[s.id] = s));
+  actifs_(FEUILLES.SEANCES).forEach((s) => (seanceParId[s.id] = s));
+  // Les pointages d'une séance placée dans la corbeille ne comptent plus dans les statistiques.
   const presences = versObjets_(FEUILLES.PRESENCES).filter((p) => {
-    if (!depuisIso) return true;
     const s = seanceParId[p.seance_id];
-    return s && s.date_seance >= depuisIso;
+    return s && (!depuisIso || s.date_seance >= depuisIso);
   });
-  const eleves = versObjets_(FEUILLES.ELEVES);
+  const eleves = actifs_(FEUILLES.ELEVES);
+  const eleveActif = {};
+  eleves.forEach((e) => (eleveActif[e.id] = true));
 
   const parClasse = {};
   presences.forEach((p) => {
@@ -472,7 +553,8 @@ function tableauDeBord(jeton, depuisIso) {
     seancesDuJour: listerSeances(jeton, { date: aujourdhui_() }),
     global: { presents: presentsTotal, total: total, taux: total ? Math.round((presentsTotal / total) * 100) : null },
     classes: classes, plusAbsents: plusAbsents, nbEleves: eleves.length,
-    notificationsEchouees: versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.statut === 'echoue').length,
+    notificationsEchouees: versObjets_(FEUILLES.NOTIFICATIONS)
+      .filter((n) => n.statut === 'echoue' && seanceParId[n.seance_id] && eleveActif[n.eleve_id]).length,
   };
 }
 

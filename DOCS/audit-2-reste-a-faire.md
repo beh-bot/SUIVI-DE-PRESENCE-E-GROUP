@@ -14,7 +14,7 @@ Tout ce qui a été corrigé n'a tourné que sous Node, avec de faux services Go
 |---|---|---|
 | P1 | Déployer `develop` dans une copie de test (classeur et projet séparés) | C'est la seule façon de valider les fiches 01 à 04 |
 | P1 | Mesurer la durée d'une connexion | Les 2 000 itérations PBKDF2 n'ont jamais été chronométrées dans Apps Script |
-| P1 | Lancer les trois entrées du menu Google Sheets | Elles ont été touchées par le renommage |
+| P1 | Lancer toutes les entrées du menu Google Sheets | Les trois premières ont été touchées par le renommage, les trois de sauvegarde sont nouvelles (fiche 08) |
 | P1 | Faire un appel complet à deux téléphones en même temps | Le verrou global n'a jamais été éprouvé en vrai |
 | P1 | Régénérer le jeton WhatsApp, relire la feuille `Utilisateurs` | La faille de la fiche 01 a été ouverte depuis la mise en ligne |
 
@@ -40,10 +40,11 @@ Hors du code, un point pèse plus que tous les autres : **toute personne ayant a
 
 | Priorité | Point | Détail |
 |---|---|---|
-| P1 | Aucune sauvegarde | Les suppressions sont définitives et en cascade. Une erreur de manipulation dans l'application ou dans le classeur est irrécupérable, sauf par l'historique des versions de Google Sheets |
+| P1 | Aucune sauvegarde | **Fait (fiche 08).** Sauvegarde manuelle et sauvegarde automatique chaque nuit sur sept jours. Il reste à l'activer depuis le menu et à faire un essai de restauration |
 | P2 | Le lien élève–séance passe par le texte de la classe | Un élève qui change de classe disparaît des feuilles de présence de ses anciennes séances, et le nombre d'élèves attendus change rétroactivement. Il manque une table d'inscription, ou une copie de la liste au moment de la séance |
 | P2 | La classe est un texte libre | « 3e A » et « 3eA » sont deux classes différentes. Il manque une table `Classes` et une liste fermée |
-| P2 | Supprimer un élève efface son historique | Les statistiques passées changent. Une désactivation, comme pour les comptes, conserverait l'historique |
+| P2 | Supprimer un élève efface son historique | **Fait (fiche 08).** Élèves et séances passent par une corbeille ; l'effacement réel demande un second geste |
+| P3 | La corbeille ne se vide jamais | Aucune durée de conservation n'est appliquée aux élèves et séances retirés |
 | P2 | Données personnelles de mineurs | Noms d'élèves et numéros de parents sont stockés sans mention d'information, de durée de conservation, ni de consentement à recevoir des messages. À vérifier au regard de la loi ivoirienne sur les données personnelles |
 | P3 | Notification bloquée « en cours » | Si l'exécution s'interrompt entre la création de la notification et l'envoi, elle reste « en cours » et le bouton « Renvoyer » n'est proposé que pour les échecs |
 

@@ -144,13 +144,15 @@ function tenterEnvoi_(notifId, seance, eleve) {
 
 function listerNotifications(jeton, statut) {
   exigerAdmin_(jeton);
-  const seances = versObjets_(FEUILLES.SEANCES);
-  const eleves = versObjets_(FEUILLES.ELEVES);
+  const seances = actifs_(FEUILLES.SEANCES);
+  const eleves = actifs_(FEUILLES.ELEVES);
   return versObjets_(FEUILLES.NOTIFICATIONS)
     .filter((n) => !statut || n.statut === statut)
+    // Les messages d'une séance ou d'un élève placés dans la corbeille ne sont plus affichés.
+    .filter((n) => seances.some((x) => x.id === n.seance_id) && eleves.some((x) => x.id === n.eleve_id))
     .map((n) => {
-      const s = seances.find((x) => x.id === n.seance_id) || {};
-      const e = eleves.find((x) => x.id === n.eleve_id) || {};
+      const s = seances.find((x) => x.id === n.seance_id);
+      const e = eleves.find((x) => x.id === n.eleve_id);
       return Object.assign(sansLigne_(n), {
         matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut, classe: s.classe,
         nom: e.nom, prenom: e.prenom, parent_nom: e.parent_nom,
@@ -165,11 +167,11 @@ function renvoyerNotification(jeton, notifId) {
   const u = exigerConnexion_(jeton);
   const n = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
   if (!n) throw new Error('Notification introuvable.');
-  const seance = trouverParId_(FEUILLES.SEANCES, n.seance_id);
+  const seance = trouverActifParId_(FEUILLES.SEANCES, n.seance_id);
   if (u.role !== 'admin' && (!seance || seance.enseignant_id !== u.id)) {
     throw new Error('Cette séance ne vous est pas attribuée.');
   }
-  const eleve = trouverParId_(FEUILLES.ELEVES, n.eleve_id);
+  const eleve = trouverActifParId_(FEUILLES.ELEVES, n.eleve_id);
   if (!seance || !eleve) throw new Error("La séance ou l'élève de ce message n'existe plus.");
   // Vérification du statut et passage à « en_attente » sous verrou : un double clic n'envoie qu'un message.
   avecVerrou_(() => {

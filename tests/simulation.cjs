@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const assert = require('assert');
 const { creerEnvironnement, racine } = require('./faux-google.cjs');
 
-const { S, noms, feuilles, proprietes, cache, verrou, contexte } = creerEnvironnement();
+const { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte } = creerEnvironnement();
 
 let nbTests = 0;
 function test(nom, fn) {
@@ -26,7 +26,12 @@ test('seules les fonctions prévues sont appelables depuis le navigateur', () =>
   const html = fs.readFileSync(path.join(racine, 'Index.html'), 'utf8');
   // Appels directs api('nom', …) / appel('nom', …), et indirects exporterPdf(el, 'nom').
   const appelees = new Set([...html.matchAll(/(?:api|appel|exporterPdf)\((?:el, )?'(\w+)'/g)].map((m) => m[1]));
-  const horsEcran = ['doGet', 'onOpen', 'initialiserFeuilles', 'creerAdministrateurDepuisMenu', 'reparerDonnees'];
+  const horsEcran = [
+    'doGet', 'onOpen', // réservées par Google
+    'initialiserFeuilles', 'creerAdministrateurDepuisMenu', 'reparerDonnees', // menu Google Sheets
+    'sauvegarderMaintenant', 'activerSauvegardeAutomatique', 'desactiverSauvegardeAutomatique', // menu Google Sheets
+    'sauvegardeAutomatique', // déclencheur nocturne (protégée par ses propres garde-fous, testés plus bas)
+  ];
   const inattendues = publiques.filter((n) => !appelees.has(n) && !horsEcran.includes(n));
   assert.deepStrictEqual(inattendues, [], 'fonctions publiques non utilisées par l\'écran (ajoutez « _ » à leur nom)');
   [...appelees].forEach((n) => assert(publiques.includes(n), 'l\'écran appelle une fonction absente : ' + n));
@@ -183,13 +188,118 @@ test('suppression d\'un compte avec transfert des séances', () => {
   echoue(() => S.connexion('kone.adama', 'nouveaupasse9'), /incorrect/);
 });
 
-test('suppressions en cascade', () => {
+test('un classeur installé avant la mise à jour reçoit la nouvelle colonne', () => {
+  // On retire l'en-tête et les valeurs de la colonne supprime_le, comme dans un classeur d'avant la corbeille.
+  const f = feuilles.Eleves;
+  const colonne = S.FEUILLES.ELEVES.entetes.indexOf('supprime_le') + 1;
+  f.getRange(1, colonne, f.getLastRow(), 1).setValues(Array.from({ length: f.getLastRow() }, () => ['']));
+  S.inserer_(S.FEUILLES.PRESENCES, { seance_id: 'x', eleve_id: 'x', statut: 'present' }); // une écriture ailleurs vide le cache
+  S.supprimerToutesLignesOu_(S.FEUILLES.PRESENCES, (p) => p.seance_id === 'x');
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 3, 'sans la colonne, tous les élèves restent actifs');
+  assert.strictEqual(f.getRange(1, colonne, 1, 1).getValues()[0][0], 'supprime_le', 'en-tête non ajouté');
+});
+
+test('corbeille : un élève supprimé garde son historique et peut être rétabli', () => {
   S.supprimerEleve(admin.jeton, eleve.id);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 2);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).length, 1, 'le pointage doit être conservé');
+  echoue(() => S.supprimerEleve(admin.jeton, eleve.id), /introuvable/);
+  echoue(() => S.pointerEleve(admin.jeton, seance.id, eleve.id, 'present', ''), /introuvable/);
+  echoue(() => S.modifierEleve(admin.jeton, eleve.id, { nom: 'A', prenom: 'B', classe: 'C', parent_nom: 'D', parent_whatsapp: '+2250700000009' }), /introuvable/);
+  // L'ancienne feuille de présence ne change pas : l'élève pointé y figure toujours ; l'autre élève de la classe aussi.
+  const lignes = S.ouvrirPointage(admin.jeton, seance.id).eleves;
+  assert.strictEqual(lignes.length, 2);
+  assert.strictEqual(lignes.find((l) => l.id === eleve.id).statut, 'absent');
+  assert.strictEqual(S.listerSeances(admin.jeton, {})[0].attendus, 2);
+  // Une nouvelle séance ne l'attend plus.
+  const nouvelle = S.creerSeance(admin.jeton, { matiere: 'Anglais', date_seance: '2026-11-17', heure_debut: '09:00', classe: '3e A' });
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, nouvelle.id).eleves.length, 1);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).plusAbsents.length, 0, 'un élève de la corbeille ne figure plus au tableau de bord');
+  assert.strictEqual(S.listerNotifications(admin.jeton, null).length, 0);
+  assert.strictEqual(S.historiqueEleve(admin.jeton, eleve.id).absences, 1, 'son historique reste consultable');
+  const c = S.listerCorbeille(admin.jeton);
+  assert.deepStrictEqual([c.eleves.length, c.eleves[0].nb_pointages, c.seances.length], [1, 1, 1]); // la séance « Français » supprimée plus haut y est aussi
+  echoue(() => S.listerCorbeille(prof.jeton), /SESSION_EXPIREE/); // compte supprimé plus haut
+  S.restaurerEleve(admin.jeton, eleve.id);
+  echoue(() => S.restaurerEleve(admin.jeton, eleve.id), /introuvable/);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 3);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).plusAbsents.length, 1);
+});
+
+test('corbeille : une séance supprimée ne compte plus, puis revient intacte', () => {
+  S.supprimerSeance(admin.jeton, seance.id);
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).some((s) => s.id === seance.id), false);
+  echoue(() => S.ouvrirPointage(admin.jeton, seance.id), /introuvable/);
+  echoue(() => S.exporterPdfSeance(admin.jeton, seance.id), /introuvable/);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).global.total, 0);
+  assert.strictEqual(S.historiqueEleve(admin.jeton, eleve.id).total, 0);
+  assert.strictEqual(S.listerCorbeille(admin.jeton).seances[0].nb_pointages, 1);
+  S.restaurerSeance(admin.jeton, seance.id);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).global.total, 1);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.length, 2);
+});
+
+test('sauvegarde manuelle : une copie fidèle dans un autre classeur', () => {
+  contexte.dansSheets = false;
+  echoue(() => S.sauvegarderMaintenant(), /getUi/);
+  assert.strictEqual(Object.keys(classeurs).length, 1);
+  contexte.dansSheets = true;
+  S.sauvegarderMaintenant();
+  contexte.dansSheets = false;
+  const copie = Object.values(classeurs).find((c) => c.getId() !== 'classeur-test');
+  assert(copie && copie.getName().includes('manuelle'), alertes[alertes.length - 1]);
+  assert.deepStrictEqual(Object.keys(copie.feuilles).sort(), Object.keys(feuilles).sort());
+  Object.keys(feuilles).forEach((n) => {
+    assert.deepStrictEqual(copie.feuilles[n].getDataRange().getValues(), feuilles[n].getDataRange().getValues(), 'feuille ' + n + ' différente');
+  });
+  // La copie est indépendante : modifier l'original ne la touche pas.
+  const avant = JSON.stringify(copie.feuilles.Eleves.getDataRange().getValues());
+  S.creerEleve(admin.jeton, { nom: 'Après', prenom: 'Sauvegarde', classe: '3e A', parent_nom: 'P', parent_whatsapp: '+2250700000010' });
+  assert.strictEqual(JSON.stringify(copie.feuilles.Eleves.getDataRange().getValues()), avant);
+  assert(!verrou.tenu);
+});
+
+test('sauvegarde automatique : inactive par défaut, une fois par jour, classeur réutilisé', () => {
+  const nb = () => Object.keys(classeurs).length;
+  const depart = nb();
+  S.sauvegardeAutomatique(); // appel depuis le navigateur alors que rien n'est activé : sans effet
+  assert.strictEqual(nb(), depart);
+  contexte.dansSheets = true;
+  S.activerSauvegardeAutomatique();
+  S.activerSauvegardeAutomatique(); // deux activations ne créent pas deux déclencheurs
+  contexte.dansSheets = false;
+  assert.strictEqual(declencheurs.length, 1);
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1);
+  S.sauvegardeAutomatique(); // moins de 20 h après : sans effet
+  assert.strictEqual(nb(), depart + 1);
+  proprietes.SAUVEGARDE_DERNIERE_MS = String(Date.now() - 7 * 864e5); // une semaine plus tard, même jour de la semaine
+  S.creerEleve(admin.jeton, { nom: 'Nouveau', prenom: 'Venu', classe: '3e A', parent_nom: 'P', parent_whatsapp: '+2250700000011' });
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1, 'le classeur du même jour doit être réécrit, pas recréé');
+  const idJour = Object.keys(proprietes).filter((k) => k.startsWith('SAUVEGARDE_JOUR_')).map((k) => proprietes[k]);
+  assert.strictEqual(idJour.length, 1);
+  assert.deepStrictEqual(classeurs[idJour[0]].feuilles.Eleves.getDataRange().getValues(), feuilles.Eleves.getDataRange().getValues());
+  contexte.dansSheets = true;
+  S.desactiverSauvegardeAutomatique();
+  contexte.dansSheets = false;
+  assert.strictEqual(declencheurs.length, 0);
+  proprietes.SAUVEGARDE_DERNIERE_MS = '0';
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1);
+});
+
+test('suppression définitive : seulement depuis la corbeille, avec les pointages', () => {
+  echoue(() => S.supprimerEleveDefinitivement(admin.jeton, eleve.id), /corbeille/);
+  echoue(() => S.supprimerSeanceDefinitivement(admin.jeton, seance.id), /corbeille/);
+  S.supprimerEleve(admin.jeton, eleve.id);
+  S.supprimerEleveDefinitivement(admin.jeton, eleve.id);
   assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).length, 0);
   assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, 0);
-  assert.strictEqual(S.versObjets_(S.FEUILLES.ELEVES).length, 2);
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.ELEVES, eleve.id), null);
   S.supprimerSeance(admin.jeton, seance.id);
-  assert.strictEqual(S.versObjets_(S.FEUILLES.SEANCES).length, 0);
+  S.supprimerSeanceDefinitivement(admin.jeton, seance.id);
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.SEANCES, seance.id), null);
   assert(!verrou.tenu && verrou.prises > 0);
 });
 

@@ -5,8 +5,9 @@
 
 const FEUILLES = {
   UTILISATEURS: { nom: 'Utilisateurs', entetes: ['id', 'nom', 'email', 'mdp_hash', 'mdp_sel', 'role', 'actif', 'cree_le'] },
-  ELEVES: { nom: 'Eleves', entetes: ['id', 'nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp', 'cree_le'] },
-  SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le'] },
+  // supprime_le : vide = actif ; une date = placé dans la corbeille à ce moment (voir actifs_ et la corbeille dans Api.gs).
+  ELEVES: { nom: 'Eleves', entetes: ['id', 'nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp', 'cree_le', 'supprime_le'] },
+  SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le', 'supprime_le'] },
   PRESENCES: { nom: 'Presences', entetes: ['id', 'seance_id', 'eleve_id', 'statut', 'motif', 'horodatage', 'pointe_par'] },
   INVITATIONS: { nom: 'Invitations', entetes: ['id', 'role', 'nom_suggere', 'expire_le', 'utilise_le', 'cree_par', 'cree_le'] },
   NOTIFICATIONS: { nom: 'Notifications', entetes: ['id', 'seance_id', 'eleve_id', 'telephone', 'statut', 'erreur', 'message_id', 'tentatives', 'cree_le', 'maj_le'] },
@@ -57,6 +58,10 @@ function onOpen() {
     .addItem('1) Initialiser les feuilles', 'initialiserFeuilles')
     .addItem('2) Créer un administrateur', 'creerAdministrateurDepuisMenu')
     .addItem('3) Réparer les données (à lancer après une mise à jour)', 'reparerDonnees')
+    .addSeparator()
+    .addItem('Sauvegarder maintenant', 'sauvegarderMaintenant')
+    .addItem('Activer la sauvegarde automatique (chaque nuit)', 'activerSauvegardeAutomatique')
+    .addItem('Désactiver la sauvegarde automatique', 'desactiverSauvegardeAutomatique')
     .addToUi();
 }
 
@@ -160,12 +165,23 @@ function versObjets_(def) {
 function lireFeuille_(def) {
   const s = feuille_(def);
   const donnees = s.getDataRange().getValues();
-  const entetes = donnees[0];
+  const entetes = donnees[0].slice();
+  // Évolution du schéma : une colonne ajoutée à la fin de def.entetes n'existe pas encore dans un
+  // classeur installé avant la mise à jour. On écrit alors son en-tête ici. C'est sans danger même
+  // si deux personnes le font en même temps : elles écrivent la même valeur dans la même cellule.
+  def.entetes.forEach((h, c) => {
+    if (entetes[c] === undefined || entetes[c] === '') {
+      s.getRange(1, c + 1, 1, 1).setValues([[h]]);
+      entetes[c] = h;
+    }
+  });
   const lignes = [];
   for (let i = 1; i < donnees.length; i++) {
     if (!donnees[i][0]) continue; // ligne vide : on l'ignore
     const o = {};
-    entetes.forEach((h, c) => (o[h] = normaliserValeur_(h, donnees[i][c])));
+    entetes.forEach((h, c) => {
+      if (h !== '') o[h] = normaliserValeur_(h, donnees[i][c] === undefined ? '' : donnees[i][c]);
+    });
     o.__ligne = i + 1;
     lignes.push(o);
   }
@@ -210,6 +226,17 @@ function reparerDonnees() {
 
 function trouverParId_(def, id) {
   return versObjets_(def).find((o) => String(o.id) === String(id)) || null;
+}
+
+/** Les lignes qui ne sont pas dans la corbeille (colonne supprime_le vide). Pour les élèves et les séances. */
+function actifs_(def) {
+  return versObjets_(def).filter((o) => !o.supprime_le);
+}
+
+/** Comme trouverParId_, mais renvoie null si la ligne est dans la corbeille. */
+function trouverActifParId_(def, id) {
+  const o = trouverParId_(def, id);
+  return o && !o.supprime_le ? o : null;
 }
 
 // Toutes les écritures se font sous verrou, lecture comprise : entre « je lis le numéro de ligne »

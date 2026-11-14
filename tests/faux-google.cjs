@@ -8,16 +8,20 @@ const crypto = require('crypto');
 const assert = require('assert');
 
 const racine = path.join(__dirname, '..');
-const FICHIERS = ['Code.gs', 'Auth.gs', 'Db.gs', 'Api.gs', 'WhatsApp.gs'];
+const FICHIERS = ['Code.gs', 'Auth.gs', 'Db.gs', 'Api.gs', 'WhatsApp.gs', 'Sauvegarde.gs'];
 
 const signe = (b) => Array.from(b, (o) => (o > 127 ? o - 256 : o));
 const octets = (a) => Buffer.from(a.map((o) => o & 255));
 
-function creerFeuille(nom) {
-  const cellules = []; // cellules[ligne][colonne], base 0
+function creerFeuille(nom, cellulesInitiales) {
+  const cellules = cellulesInitiales || []; // cellules[ligne][colonne], base 0
   const feuille = {
     lectures: 0,
     getName: () => nom,
+    setName(n) { feuille.renommer(n); nom = n; },
+    renommer() {}, // remplacé par le classeur qui contient la feuille
+    // Comme dans Google Sheets : la copie arrive dans le classeur de destination sous le nom « Copie de … ».
+    copyTo: (destination) => destination.ajouterFeuille('Copie de ' + nom, cellules.map((l) => l.slice())),
     getLastRow: () => cellules.length,
     getMaxRows: () => Math.max(cellules.length, 1000),
     setFrozenRows() {},
@@ -51,7 +55,7 @@ function creerFeuille(nom) {
 
 /**
  * Crée un environnement neuf (classeur vide) et y charge le code serveur.
- * Renvoie { S, noms, feuilles, proprietes, cache, verrou, alertes, contexte } :
+ * Renvoie { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte } :
  *   S          toutes les fonctions du serveur, plus FEUILLES ;
  *   contexte   { dansSheets } : true = lancé depuis Google Sheets, false = application web.
  */
@@ -64,19 +68,45 @@ function creerEnvironnement(options) {
   const verrou = { tenu: false, prises: 0 };
   const contexte = { dansSheets: true };
 
-  const classeur = {
-    getId: () => 'classeur-test',
-    getSpreadsheetTimeZone: () => opt.fuseau,
-    getSheetByName: (n) => feuilles[n] || null,
-    insertSheet: (n) => (feuilles[n] = creerFeuille(n)),
-    getSheets: () => Object.values(feuilles),
-    deleteSheet: (f) => { delete feuilles[f.getName()]; },
-  };
+  // Un classeur = un ensemble de feuilles. Le classeur principal utilise l'objet « feuilles » exposé aux tests.
+  const classeurs = {};
+  function creerClasseur(id, nom, sesFeuilles) {
+    const c = {
+      getId: () => id,
+      getName: () => nom,
+      rename(n) { nom = n; },
+      getUrl: () => 'https://docs.example/' + id,
+      getSpreadsheetTimeZone: () => opt.fuseau,
+      getSheetByName: (n) => sesFeuilles[n] || null,
+      insertSheet: (n) => c.ajouterFeuille(n),
+      getSheets: () => Object.values(sesFeuilles),
+      deleteSheet(f) {
+        assert(Object.keys(sesFeuilles).length > 1, 'un classeur doit garder au moins une feuille');
+        delete sesFeuilles[f.getName()];
+      },
+      ajouterFeuille(n, cellules) {
+        assert(!sesFeuilles[n], 'une feuille porte déjà le nom ' + n);
+        const f = creerFeuille(n, cellules);
+        f.renommer = (nouveau) => {
+          assert(!sesFeuilles[nouveau], 'une feuille porte déjà le nom ' + nouveau);
+          delete sesFeuilles[f.getName()];
+          sesFeuilles[nouveau] = f;
+        };
+        return (sesFeuilles[n] = f);
+      },
+      feuilles: sesFeuilles,
+    };
+    return (classeurs[id] = c);
+  }
+  const classeur = creerClasseur('classeur-test', 'Classeur de test', feuilles);
+  const declencheurs = [];
   const interfaceSheets = { alert: (m) => alertes.push(m), ButtonSet: {}, Button: {} };
   const services = {
     SpreadsheetApp: {
       getActiveSpreadsheet: () => classeur,
-      openById: () => classeur,
+      openById(id) { if (!classeurs[id]) throw new Error('classeur introuvable : ' + id); return classeurs[id]; },
+      // Comme dans Google Sheets : un classeur neuf contient une feuille vide.
+      create(nom) { const c = creerClasseur('classeur-' + crypto.randomUUID(), nom, {}); c.ajouterFeuille('Feuille 1'); return c; },
       flush() {},
       getUi() { if (!contexte.dansSheets) throw new Error('getUi indisponible dans ce contexte'); return interfaceSheets; },
     },
@@ -123,7 +153,16 @@ function creerEnvironnement(options) {
       },
     },
     Session: { getScriptTimeZone: () => opt.fuseau },
-    ScriptApp: { getService: () => ({ getUrl: () => opt.url }) },
+    ScriptApp: {
+      getService: () => ({ getUrl: () => opt.url }),
+      getProjectTriggers: () => declencheurs.slice(),
+      deleteTrigger(d) { declencheurs.splice(declencheurs.indexOf(d), 1); },
+      newTrigger(fonction) {
+        const d = { getHandlerFunction: () => fonction };
+        const chaine = { timeBased: () => chaine, everyDays: () => chaine, atHour: () => chaine, create() { declencheurs.push(d); return d; } };
+        return chaine;
+      },
+    },
     Logger: { log() {} },
     UrlFetchApp: { fetch() { throw new Error('aucun appel réseau n\'est fait hors de Google'); } },
     HtmlService: {},
@@ -132,7 +171,7 @@ function creerEnvironnement(options) {
   const source = FICHIERS.map((f) => fs.readFileSync(path.join(racine, f), 'utf8')).join('\n');
   const noms = [...source.matchAll(/^function (\w+)\(/gm)].map((m) => m[1]);
   const S = new Function(...Object.keys(services), `${source}\nreturn { ${noms.join(', ')}, FEUILLES };`)(...Object.values(services));
-  return { S, noms, feuilles, proprietes, cache, verrou, alertes, contexte };
+  return { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte };
 }
 
 module.exports = { creerEnvironnement, racine };
