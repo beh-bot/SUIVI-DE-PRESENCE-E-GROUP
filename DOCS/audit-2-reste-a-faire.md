@@ -78,8 +78,8 @@ Ces limites tiennent au choix d'un tableur comme base de données. Elles se repo
 
 | Priorité | Point | Détail |
 |---|---|---|
-| P1 | Déploiement par copier-coller | Le dépôt ne contient ni `appsscript.json` ni configuration `clasp`. Rien ne garantit que la production correspond au dépôt |
-| P2 | Pas d'intégration continue | Les tests existent mais ne se lancent qu'à la main. Une action GitHub qui exécute `node tests/simulation.cjs` à chaque envoi demande quelques lignes |
+| P1 | Déploiement par copier-coller | **Préparé (fiche 07).** Le manifeste et la configuration `clasp` sont dans le dépôt. Il reste à installer `clasp`, à se connecter, et à comparer le manifeste avec celui de la production |
+| P2 | Pas d'intégration continue | **Fait (fiche 07).** GitHub lance les tests à chaque envoi et sur chaque pull request |
 | P2 | Pas d'environnement de test | Il n'existe qu'une production. Toute modification s'essaie sur les vraies données |
 | P2 | Écran en un seul fichier | `Index.html` fait plus de 1 000 lignes, mêle structure, style et logique, et n'a aucun test |
 | P2 | CSS compilé sans ses sources | Le Tailwind intégré ne peut pas être régénéré. Toute nouvelle classe est sans effet |

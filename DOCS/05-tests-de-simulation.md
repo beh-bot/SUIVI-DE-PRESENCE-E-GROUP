@@ -42,6 +42,8 @@ Le code serveur n'a pas été modifié pour être testable : c'est lui, tel quel
 14. Suppression d'un compte avec transfert de ses séances.
 15. Suppressions en cascade.
 
+Deux vérifications sans scénario ont été ajoutées ensuite (fiche 07) : la syntaxe des scripts de `Index.html`, et la liste des fichiers envoyés par `clasp`.
+
 ## Lancer les tests
 
 Il faut Node.js installé. Depuis la racine du dépôt :
@@ -50,7 +52,7 @@ Il faut Node.js installé. Depuis la racine du dépôt :
 node tests/simulation.cjs
 ```
 
-Le résultat attendu se termine par `15 tests réussis.`. Au premier échec, le test s'arrête et affiche la vérification qui a échoué.
+Le résultat attendu se termine par `17 tests réussis.`. Au premier échec, le test s'arrête et affiche la vérification qui a échoué.
 
 L'extension est `.cjs` et non `.js` pour que Node traite toujours ces fichiers de la même façon, quel que soit le dossier où le dépôt est rangé.
 
@@ -59,7 +61,7 @@ L'extension est `.cjs` et non `.js` pour que Node traite toujours ces fichiers d
 - **Les conversions automatiques de Google Sheets.** Le vrai tableur transforme `08:30` en heure et `+225…` en nombre. Les fausses feuilles gardent les valeurs telles quelles. Tout le code de `Db.gs` qui gère ces conversions n'est donc pas mis à l'épreuve.
 - **La concurrence réelle.** Deux exécutions simultanées ne peuvent pas être reproduites ainsi.
 - **Les quotas et la vitesse.** Ni les limites de Google, ni le temps réel des 2 000 itérations.
-- **L'écran.** `Index.html` n'est pas testé, sauf la liste des fonctions qu'il appelle.
+- **L'écran.** `Index.html` n'est pas testé, sauf sa syntaxe et la liste des fonctions qu'il appelle.
 - **WhatsApp.** Le test tourne en mode simulation (`WHATSAPP_DRY_RUN`).
 
 Un test qui passe ici signifie que la logique est cohérente, pas que le déploiement fonctionne. Un essai dans une copie réelle reste nécessaire avant toute mise en production.
@@ -73,4 +75,4 @@ Un test est un bloc `test('description', () => { … })` qui appelle des fonctio
 - **Comment tester un code qui dépend d'une plateforme ?** En remplaçant ses dépendances par des doublures qui ont la même interface. C'est le principe du bouchon (mock).
 - **Est-ce un test unitaire ?** Plutôt un test d'intégration : il fait travailler ensemble l'API, l'authentification et la couche de données, avec seulement la plateforme remplacée.
 - **Quelle est la limite d'une doublure ?** Elle ne reproduit que ce qu'on a pensé à imiter. Un comportement réel non imité passe inaperçu.
-- **Que faudrait-il ajouter ?** Lancer ces tests automatiquement à chaque envoi de code sur GitHub, et tester l'écran dans un navigateur piloté.
+- **Que faudrait-il ajouter ?** Tester l'écran dans un navigateur piloté, et reproduire les conversions de Google Sheets dans les fausses feuilles.

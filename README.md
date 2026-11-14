@@ -21,6 +21,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `Auth.gs` | Mots de passe (PBKDF2), sessions (jeton valable 12 h), limite de tentatives |
 | `Db.gs` | Lecture et écriture des feuilles, verrou, menu d'installation dans Sheets |
 | `WhatsApp.gs` | Envoi du message d'absence et journal des notifications |
+| `appsscript.json` | Manifeste Apps Script : moteur V8, accès à l'application web |
 | `tests/simulation.cjs` | Test du code serveur avec de faux services Google |
 | `tests/apercu-local.cjs` | Aperçu de l'application dans le navigateur, sans Google |
 | `DOCS/` | Explication de chaque modification, et audit de ce qu'il reste à faire |
@@ -30,7 +31,7 @@ Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`
 ## Installation
 
 1. Créer un classeur Google Sheets, puis ouvrir **Extensions > Apps Script**.
-2. Y créer les fichiers `Code`, `Auth`, `Db`, `Api`, `WhatsApp` (scripts) et `Index` (HTML), et y coller le contenu des fichiers du dépôt. Le dossier `tests/` ne se copie pas.
+2. Y créer les fichiers `Code`, `Auth`, `Db`, `Api`, `WhatsApp` (scripts) et `Index` (HTML), et y coller le contenu des fichiers du dépôt. Le dossier `tests/` ne se copie pas. Avec l'outil `clasp`, un `clasp push` remplace ce copier-coller : voir `DOCS/07-integration-continue-et-clasp.md`.
 3. Recharger le classeur. Dans le menu **Suivi de présence**, lancer « 1) Initialiser les feuilles », puis « 2) Créer un administrateur ».
 4. **Déployer > Nouveau déploiement > Application Web**, exécutée en tant que propriétaire. Le lien obtenu se termine par `/exec`.
 5. Ouvrir ce lien et se connecter. Ajouter `?test=1` au lien permet de vérifier que le déploiement répond.
@@ -64,10 +65,10 @@ Le modèle reçoit quatre variables, dans cet ordre : nom de l'élève, matière
 ## Tests
 
 ```
-node tests/simulation.cjs
+npm test
 ```
 
-Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement.
+Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement. GitHub le lance automatiquement à chaque envoi de code et sur chaque pull request.
 
 ## Aperçu local
 
@@ -84,4 +85,4 @@ Ouvre l'application sur http://localhost:8765 avec des données de démonstratio
 - Un « Absent » envoie le message tout de suite ; un pointage fait par erreur ne peut pas être rattrapé auprès du parent.
 - « Envoyé » signifie accepté par Meta, pas remis au parent.
 - Toute personne ayant accès au classeur voit toutes les données : ne le partager qu'avec l'administrateur.
-- Le manifeste `appsscript.json` et la configuration `clasp` ne sont pas dans le dépôt : la mise en production se fait par copier-coller.
+- Le manifeste `appsscript.json` du dépôt a été déduit du code : il faut le comparer à celui de la production avant le premier `clasp push` vers elle.

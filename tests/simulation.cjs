@@ -32,6 +32,22 @@ test('seules les fonctions prévues sont appelables depuis le navigateur', () =>
   [...appelees].forEach((n) => assert(publiques.includes(n), 'l\'écran appelle une fonction absente : ' + n));
 });
 
+test('les scripts de Index.html sont syntaxiquement valides', () => {
+  const html = fs.readFileSync(path.join(racine, 'Index.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert(scripts.length >= 1, 'aucun script trouvé dans Index.html');
+  scripts.forEach((s) => new Function(s[1])); // lève une SyntaxError si le script est invalide
+});
+
+test('le déploiement par clasp envoie exactement les fichiers de l\'application', () => {
+  const manifeste = JSON.parse(fs.readFileSync(path.join(racine, 'appsscript.json'), 'utf8'));
+  assert.strictEqual(manifeste.runtimeVersion, 'V8', 'le code utilise une syntaxe qui exige le moteur V8');
+  const autorises = fs.readFileSync(path.join(racine, '.claspignore'), 'utf8').split(/\r?\n/)
+    .filter((l) => l.startsWith('!')).map((l) => l.slice(1)).sort();
+  const attendus = fs.readdirSync(racine).filter((f) => /\.(gs|html)$/.test(f)).concat('appsscript.json').sort();
+  assert.deepStrictEqual(autorises, attendus, '.claspignore doit lister chaque fichier .gs et .html de la racine, et rien d\'autre');
+});
+
 test('initialisation des feuilles, refusée hors de Google Sheets', () => {
   contexte.dansSheets = false;
   echoue(() => S.initialiserFeuilles(), /getUi/);
