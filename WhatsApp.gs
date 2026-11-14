@@ -169,9 +169,14 @@ function renvoyerNotification(jeton, notifId) {
   if (u.role !== 'admin' && (!seance || seance.enseignant_id !== u.id)) {
     throw new Error('Cette séance ne vous est pas attribuée.');
   }
-  if (n.statut !== 'echoue') throw new Error('Seul un message échoué peut être renvoyé.');
   const eleve = trouverParId_(FEUILLES.ELEVES, n.eleve_id);
-  mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
+  if (!seance || !eleve) throw new Error("La séance ou l'élève de ce message n'existe plus.");
+  // Vérification du statut et passage à « en_attente » sous verrou : un double clic n'envoie qu'un message.
+  avecVerrou_(() => {
+    const actuelle = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
+    if (!actuelle || actuelle.statut !== 'echoue') throw new Error('Seul un message échoué peut être renvoyé.');
+    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
+  });
   tenterEnvoi_(notifId, seance, eleve);
   return sansLigne_(trouverParId_(FEUILLES.NOTIFICATIONS, notifId));
 }

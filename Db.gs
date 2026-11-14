@@ -13,6 +13,8 @@ const FEUILLES = {
 };
 
 let classeurEnCache = null;
+let cacheFeuilles = {}; // lignes déjà lues pendant cet appel, par nom de feuille (voir versObjets_)
+let verrouTenu = false; // vrai pendant une section avecVerrou_ (voir en bas de fichier)
 
 /**
  * Le classeur de données. Dans une application web, « le classeur actif » n'est pas toujours défini :
@@ -148,6 +150,14 @@ function normaliserValeur_(h, v) {
 
 /** Toutes les lignes d'une feuille sous forme d'objets {colonne: valeur}. __ligne = numéro de ligne réel dans la feuille. */
 function versObjets_(def) {
+  // Cache valable le temps d'UN appel : une même feuille n'est lue qu'une fois par requête.
+  // Il est vidé à chaque écriture et à chaque prise de verrou (voir avecVerrou_), et on renvoie
+  // des copies pour qu'un appelant ne puisse pas abîmer les données en cache.
+  if (!cacheFeuilles[def.nom]) cacheFeuilles[def.nom] = lireFeuille_(def);
+  return cacheFeuilles[def.nom].map((o) => Object.assign({}, o));
+}
+
+function lireFeuille_(def) {
   const s = feuille_(def);
   const donnees = s.getDataRange().getValues();
   const entetes = donnees[0];
@@ -167,6 +177,7 @@ function ecrireLigne_(s, numLigne, def, ligne) {
   const zone = s.getRange(numLigne, 1, 1, def.entetes.length);
   zone.setNumberFormats(formatsLigne_(def));
   zone.setValues([ligne]);
+  delete cacheFeuilles[def.nom];
 }
 
 /** Applique le format texte à toutes les colonnes concernées d'une feuille (lancé par « Initialiser » et « Réparer »). */
@@ -201,38 +212,53 @@ function trouverParId_(def, id) {
   return versObjets_(def).find((o) => String(o.id) === String(id)) || null;
 }
 
+// Toutes les écritures se font sous verrou, lecture comprise : entre « je lis le numéro de ligne »
+// et « j'écris », une autre personne pourrait sinon ajouter ou supprimer une ligne, et l'écriture
+// tomberait au mauvais endroit (ou deux ajouts simultanés s'écraseraient).
+
 function inserer_(def, objet) {
-  const s = feuille_(def);
-  const id = objet.id || Utilities.getUuid();
-  const complet = Object.assign({ cree_le: nowIso_() }, objet, { id });
-  const ligne = def.entetes.map((h) => (complet[h] === undefined ? '' : complet[h]));
-  ecrireLigne_(s, s.getLastRow() + 1, def, ligne);
-  return Object.assign({}, complet);
+  return avecVerrou_(() => {
+    const s = feuille_(def);
+    const id = objet.id || Utilities.getUuid();
+    const complet = Object.assign({ cree_le: nowIso_() }, objet, { id });
+    const ligne = def.entetes.map((h) => (complet[h] === undefined ? '' : complet[h]));
+    ecrireLigne_(s, s.getLastRow() + 1, def, ligne);
+    return Object.assign({}, complet);
+  });
 }
 
 function mettreAJour_(def, id, patch) {
-  const existant = trouverParId_(def, id);
-  if (!existant) return null;
-  const fusion = Object.assign({}, existant, patch, { id });
-  delete fusion.__ligne;
-  const ligne = def.entetes.map((h) => (fusion[h] === undefined ? '' : fusion[h]));
-  ecrireLigne_(feuille_(def), existant.__ligne, def, ligne);
-  return fusion;
+  return avecVerrou_(() => {
+    const existant = trouverParId_(def, id);
+    if (!existant) return null;
+    const fusion = Object.assign({}, existant, patch, { id });
+    delete fusion.__ligne;
+    const ligne = def.entetes.map((h) => (fusion[h] === undefined ? '' : fusion[h]));
+    ecrireLigne_(feuille_(def), existant.__ligne, def, ligne);
+    return fusion;
+  });
 }
 
 function supprimerLigne_(def, id) {
-  const existant = trouverParId_(def, id);
-  if (!existant) return false;
-  feuille_(def).deleteRow(existant.__ligne);
-  return true;
+  return avecVerrou_(() => {
+    const existant = trouverParId_(def, id);
+    if (!existant) return false;
+    feuille_(def).deleteRow(existant.__ligne);
+    delete cacheFeuilles[def.nom];
+    return true;
+  });
 }
 
 /** Supprime toutes les lignes correspondant au filtre (utilisé pour les suppressions en cascade). */
 function supprimerToutesLignesOu_(def, filtre) {
-  const s = feuille_(def);
-  const correspondantes = versObjets_(def).filter(filtre).sort((a, b) => b.__ligne - a.__ligne);
-  correspondantes.forEach((o) => s.deleteRow(o.__ligne));
-  return correspondantes.length;
+  return avecVerrou_(() => {
+    const s = feuille_(def);
+    // De bas en haut : supprimer une ligne décale les numéros des lignes situées en dessous.
+    const correspondantes = versObjets_(def).filter(filtre).sort((a, b) => b.__ligne - a.__ligne);
+    correspondantes.forEach((o) => s.deleteRow(o.__ligne));
+    delete cacheFeuilles[def.nom];
+    return correspondantes.length;
+  });
 }
 
 function sansLigne_(o) {
@@ -246,16 +272,29 @@ function nowIso_() {
 }
 
 /**
- * Section critique protégée par un verrou (évite qu'une double vérification email/doublon
- * ou un double pointage simultané ne créent deux lignes). À garder courte : ne jamais y
- * mettre un appel réseau (WhatsApp) qui bloquerait les autres utilisateurs pendant ce temps.
+ * Section critique protégée par un verrou : une seule exécution à la fois peut s'y trouver.
+ * À garder courte : ne jamais y mettre un appel réseau (WhatsApp) qui bloquerait les autres
+ * utilisateurs pendant ce temps. Réentrant : une fonction déjà sous verrou peut en appeler une
+ * autre qui le demande aussi (c'est le cas de inserer_, mettreAJour_, supprimerLigne_…).
  */
 function avecVerrou_(fn) {
+  if (verrouTenu) return fn();
   const verrou = LockService.getScriptLock();
-  verrou.waitLock(15000);
+  try {
+    verrou.waitLock(20000);
+  } catch (e) {
+    throw new Error("L'application est très sollicitée en ce moment. Réessayez dans quelques secondes.");
+  }
+  verrouTenu = true;
+  cacheFeuilles = {}; // ce qu'on a lu avant d'avoir le verrou a pu changer entre-temps
   try {
     return fn();
   } finally {
-    verrou.releaseLock();
+    verrouTenu = false;
+    try {
+      SpreadsheetApp.flush(); // les écritures doivent être visibles des autres avant de rendre le verrou
+    } finally {
+      verrou.releaseLock();
+    }
   }
 }

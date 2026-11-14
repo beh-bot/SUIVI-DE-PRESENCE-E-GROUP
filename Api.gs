@@ -171,16 +171,12 @@ function creerUtilisateur(jeton, champs) {
 
 function modifierUtilisateur(jeton, id, champs) {
   const moiCourant = exigerAdmin_(jeton);
-  const actuel = trouverParId_(FEUILLES.UTILISATEURS, id);
-  if (!actuel || !actuel.actif) throw new Error('Compte introuvable.');
+  champs = champs || {};
   const nom = texteRequis_(champs.nom, 'Le nom', 80);
   const email = identifiantValide_(champs.email);
   const role = champs.role === 'admin' ? 'admin' : 'enseignant';
   if (id === moiCourant.id && role !== 'admin') {
     throw new Error("Vous ne pouvez pas retirer votre propre rôle d'administrateur.");
-  }
-  if (versObjets_(FEUILLES.UTILISATEURS).some((u) => u.actif && u.email === email && u.id !== id)) {
-    throw new Error('Cet identifiant est déjà utilisé.');
   }
   const patch = { nom: nom, email: email, role: role };
   if (champs.mot_de_passe) {
@@ -189,7 +185,16 @@ function modifierUtilisateur(jeton, id, champs) {
     patch.mdp_hash = paire.hash;
     patch.mdp_sel = paire.sel;
   }
-  const maj = mettreAJour_(FEUILLES.UTILISATEURS, id, patch);
+  // Vérification du doublon et écriture dans la même section verrouillée (sinon deux modifications
+  // simultanées pourraient donner le même identifiant à deux comptes).
+  const maj = avecVerrou_(() => {
+    const actuel = trouverParId_(FEUILLES.UTILISATEURS, id);
+    if (!actuel || !actuel.actif) throw new Error('Compte introuvable.');
+    if (versObjets_(FEUILLES.UTILISATEURS).some((u) => u.actif && String(u.email).toLowerCase() === email && u.id !== id)) {
+      throw new Error('Cet identifiant est déjà utilisé.');
+    }
+    return mettreAJour_(FEUILLES.UTILISATEURS, id, patch);
+  });
   if (champs.mot_de_passe && id !== moiCourant.id) invaliderSessionsUtilisateur_(id);
   return { id: maj.id, nom: maj.nom, email: maj.email, role: maj.role };
 }
@@ -202,21 +207,24 @@ function modifierUtilisateur(jeton, id, champs) {
 function supprimerUtilisateur(jeton, id, reassignerA) {
   const moiCourant = exigerAdmin_(jeton);
   if (id === moiCourant.id) throw new Error('Vous ne pouvez pas supprimer votre propre compte.');
-  const u = trouverParId_(FEUILLES.UTILISATEURS, id);
-  if (!u || !u.actif) throw new Error('Compte introuvable.');
+  const resultat = avecVerrou_(() => {
+    const u = trouverParId_(FEUILLES.UTILISATEURS, id);
+    if (!u || !u.actif) throw new Error('Compte introuvable.');
 
-  const seances = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
-  if (seances.length && !reassignerA) {
-    return { ok: false, code: 'SEANCES_ATTRIBUEES', nb_seances: seances.length };
-  }
-  if (seances.length) {
-    const repreneur = trouverParId_(FEUILLES.UTILISATEURS, reassignerA);
-    if (!repreneur || !repreneur.actif || reassignerA === id) throw new Error('Le repreneur choisi est invalide.');
-    seances.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
-  }
-  mettreAJour_(FEUILLES.UTILISATEURS, id, { actif: false, email: `supprime-${id}-${u.email}` });
-  invaliderSessionsUtilisateur_(id);
-  return { ok: true, seances_reattribuees: seances.length };
+    const seances = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
+    if (seances.length && !reassignerA) {
+      return { ok: false, code: 'SEANCES_ATTRIBUEES', nb_seances: seances.length };
+    }
+    if (seances.length) {
+      const repreneur = trouverParId_(FEUILLES.UTILISATEURS, reassignerA);
+      if (!repreneur || !repreneur.actif || reassignerA === id) throw new Error('Le repreneur choisi est invalide.');
+      seances.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
+    }
+    mettreAJour_(FEUILLES.UTILISATEURS, id, { actif: false, email: `supprime-${id}-${u.email}` });
+    return { ok: true, seances_reattribuees: seances.length };
+  });
+  if (resultat.ok) invaliderSessionsUtilisateur_(id);
+  return resultat;
 }
 
 // ── Élèves ────────────────────────────────────────────────────────────
@@ -261,10 +269,11 @@ function modifierEleve(jeton, id, champs) {
 
 function supprimerEleve(jeton, id) {
   exigerAdmin_(jeton);
-  const ok = supprimerLigne_(FEUILLES.ELEVES, id);
-  if (!ok) throw new Error('Élève introuvable.');
-  supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.eleve_id === id);
-  supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.eleve_id === id);
+  avecVerrou_(() => {
+    if (!supprimerLigne_(FEUILLES.ELEVES, id)) throw new Error('Élève introuvable.');
+    supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.eleve_id === id);
+    supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.eleve_id === id);
+  });
   return { ok: true };
 }
 
@@ -346,10 +355,11 @@ function creerSeance(jeton, champs) {
 
 function supprimerSeance(jeton, id) {
   exigerAdmin_(jeton);
-  const ok = supprimerLigne_(FEUILLES.SEANCES, id);
-  if (!ok) throw new Error('Séance introuvable.');
-  supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.seance_id === id);
-  supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.seance_id === id);
+  avecVerrou_(() => {
+    if (!supprimerLigne_(FEUILLES.SEANCES, id)) throw new Error('Séance introuvable.');
+    supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.seance_id === id);
+    supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.seance_id === id);
+  });
   return { ok: true };
 }
 
