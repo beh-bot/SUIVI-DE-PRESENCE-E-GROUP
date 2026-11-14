@@ -22,6 +22,8 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `Db.gs` | Lecture et écriture des feuilles, verrou, menu d'installation dans Sheets |
 | `WhatsApp.gs` | Envoi du message d'absence et journal des notifications |
 | `tests/simulation.cjs` | Test du code serveur avec de faux services Google |
+| `tests/apercu-local.cjs` | Aperçu de l'application dans le navigateur, sans Google |
+| `DOCS/` | Explication de chaque modification, et audit de ce qu'il reste à faire |
 
 Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`. Un élève est rattaché à une séance par le texte de sa **classe**, qui doit être écrit exactement pareil des deux côtés.
 
@@ -66,6 +68,14 @@ node tests/simulation.cjs
 ```
 
 Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement.
+
+## Aperçu local
+
+```
+node tests/apercu-local.cjs
+```
+
+Ouvre l'application sur http://localhost:8765 avec des données de démonstration, sans déploiement. Les comptes et les différences avec la vraie application sont décrits dans `DOCS/06-apercu-local.md`.
 
 ## Limites connues
 

@@ -7,118 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const assert = require('assert');
+const { creerEnvironnement, racine } = require('./faux-google.cjs');
 
-const racine = path.join(__dirname, '..');
-const FICHIERS = ['Code.gs', 'Auth.gs', 'Db.gs', 'Api.gs', 'WhatsApp.gs'];
-
-// ── Imitations des services Google ──────────────────────────────────────
-const signe = (b) => Array.from(b, (o) => (o > 127 ? o - 256 : o));
-const octets = (a) => Buffer.from(a.map((o) => o & 255));
-
-function creerFeuille(nom) {
-  const cellules = []; // cellules[ligne][colonne], base 0
-  const feuille = {
-    lectures: 0,
-    getName: () => nom,
-    getLastRow: () => cellules.length,
-    getMaxRows: () => Math.max(cellules.length, 1000),
-    setFrozenRows() {},
-    deleteRow(n) { cellules.splice(n - 1, 1); },
-    getDataRange: () => feuille.getRange(1, 1, Math.max(cellules.length, 1), Math.max(1, ...cellules.map((l) => l.length))),
-    getRange(l, c, nl, nc) {
-      return {
-        getValues() {
-          feuille.lectures++;
-          const res = [];
-          for (let i = 0; i < nl; i++) {
-            const ligne = [];
-            for (let j = 0; j < nc; j++) ligne.push((cellules[l - 1 + i] || [])[c - 1 + j] ?? '');
-            res.push(ligne);
-          }
-          return res;
-        },
-        setValues(v) {
-          v.forEach((ligne, i) => {
-            while (cellules.length < l + i) cellules.push([]);
-            ligne.forEach((val, j) => { cellules[l - 1 + i][c - 1 + j] = val; });
-          });
-        },
-        setNumberFormats() {},
-        setNumberFormat() {},
-      };
-    },
-  };
-  return feuille;
-}
-
-const feuilles = {};
-const classeur = {
-  getId: () => 'classeur-test',
-  getSpreadsheetTimeZone: () => 'UTC',
-  getSheetByName: (n) => feuilles[n] || null,
-  insertSheet: (n) => (feuilles[n] = creerFeuille(n)),
-  getSheets: () => Object.values(feuilles),
-  deleteSheet: (f) => { delete feuilles[f.getName()]; },
-};
-const alertes = [];
-const interfaceSheets = { alert: (m) => alertes.push(m), ButtonSet: {}, Button: {} };
-let dansSheets = true; // false = on simule l'application web (pas d'interface Google Sheets)
-const SpreadsheetApp = {
-  getActiveSpreadsheet: () => classeur,
-  openById: () => classeur,
-  flush() {},
-  getUi() { if (!dansSheets) throw new Error('getUi indisponible dans ce contexte'); return interfaceSheets; },
-};
-
-const proprietes = {};
-const PropertiesService = {
-  getScriptProperties: () => ({
-    getProperty: (k) => (k in proprietes ? proprietes[k] : null),
-    setProperty: (k, v) => { proprietes[k] = String(v); },
-    deleteProperty: (k) => { delete proprietes[k]; },
-    getProperties: () => Object.assign({}, proprietes),
-  }),
-};
-const cache = {};
-const CacheService = {
-  getScriptCache: () => ({
-    get: (k) => (k in cache ? cache[k] : null),
-    put: (k, v) => { cache[k] = String(v); },
-    remove: (k) => { delete cache[k]; },
-  }),
-};
-const verrou = { tenu: false, prises: 0 };
-const LockService = {
-  getScriptLock: () => ({
-    waitLock() { assert(!verrou.tenu, 'verrou demandé alors qu\'il est déjà tenu (non réentrant)'); verrou.tenu = true; verrou.prises++; },
-    releaseLock() { verrou.tenu = false; },
-  }),
-};
-const Utilities = {
-  getUuid: () => crypto.randomUUID(),
-  DigestAlgorithm: { SHA_256: 1 },
-  Charset: { UTF_8: 1 },
-  computeDigest: (a, t) => signe(crypto.createHash('sha256').update(t, 'utf8').digest()),
-  computeHmacSha256Signature: (v, k) => signe(crypto.createHmac('sha256', octets(k)).update(octets(v)).digest()),
-  newBlob: (s) => ({ getBytes: () => signe(Buffer.from(s, 'utf8')), getAs: () => ({ getBytes: () => signe(Buffer.from('%PDF-faux')) }) }),
-  base64Encode: (b) => octets(b).toString('base64'),
-  formatDate(d, tz, f) {
-    const p = (n) => String(n).padStart(2, '0');
-    return f.replace('yyyy', d.getUTCFullYear()).replace('MM', p(d.getUTCMonth() + 1)).replace('dd', p(d.getUTCDate()))
-      .replace('HH', p(d.getUTCHours())).replace('mm', p(d.getUTCMinutes())).replace('ss', p(d.getUTCSeconds()));
-  },
-};
-const Session = { getScriptTimeZone: () => 'UTC' };
-const ScriptApp = { getService: () => ({ getUrl: () => 'https://script.example/exec' }) };
-const Logger = { log() {} };
-const UrlFetchApp = { fetch() { throw new Error('aucun appel réseau attendu pendant les tests'); } };
-const HtmlService = {};
-
-// ── Chargement du code serveur ──────────────────────────────────────────
-const source = FICHIERS.map((f) => fs.readFileSync(path.join(racine, f), 'utf8')).join('\n');
-const noms = [...source.matchAll(/^function (\w+)\(/gm)].map((m) => m[1]);
-const services = { SpreadsheetApp, PropertiesService, CacheService, LockService, Utilities, Session, ScriptApp, Logger, UrlFetchApp, HtmlService };
-const S = new Function(...Object.keys(services), `${source}\nreturn { ${noms.join(', ')}, FEUILLES };`)(...Object.values(services));
+const { S, noms, feuilles, proprietes, cache, verrou, contexte } = creerEnvironnement();
 
 let nbTests = 0;
 function test(nom, fn) {
@@ -142,13 +33,13 @@ test('seules les fonctions prévues sont appelables depuis le navigateur', () =>
 });
 
 test('initialisation des feuilles, refusée hors de Google Sheets', () => {
-  dansSheets = false;
+  contexte.dansSheets = false;
   echoue(() => S.initialiserFeuilles(), /getUi/);
   assert.strictEqual(Object.keys(feuilles).length, 0);
-  dansSheets = true;
+  contexte.dansSheets = true;
   S.initialiserFeuilles();
   assert.strictEqual(Object.keys(feuilles).length, 6);
-  dansSheets = false;
+  contexte.dansSheets = false;
 });
 
 proprietes.WHATSAPP_DRY_RUN = 'true';
