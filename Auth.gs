@@ -137,13 +137,19 @@ function utilisateurDuJeton_(jeton) {
   }
   const u = trouverParId_(FEUILLES.UTILISATEURS, session.id);
   if (!u || !u.actif) return null;
-  return { id: u.id, nom: u.nom, email: u.email, role: u.role };
+  return { id: u.id, nom: u.nom, email: u.email, role: u.role, mdp_a_changer: u.mdp_a_changer === 'oui' };
 }
 
-/** Lève 'SESSION_EXPIREE' (mot-clé que le navigateur reconnaît pour renvoyer vers l'écran de connexion). */
-function exigerConnexion_(jeton) {
+/**
+ * Lève 'SESSION_EXPIREE' (mot-clé que le navigateur reconnaît pour renvoyer vers l'écran de connexion).
+ * Lève 'MOT_DE_PASSE_A_CHANGER' tant que l'utilisateur n'a pas remplacé le mot de passe que
+ * l'administrateur a choisi pour lui : d'ici là, il ne peut rien faire d'autre que le changer.
+ * C'est ici, côté serveur, que la règle est appliquée ; l'écran ne fait que l'annoncer.
+ */
+function exigerConnexion_(jeton, tolererMotDePasseAChanger) {
   const u = utilisateurDuJeton_(jeton);
   if (!u) throw new Error('SESSION_EXPIREE');
+  if (u.mdp_a_changer && !tolererMotDePasseAChanger) throw new Error('MOT_DE_PASSE_A_CHANGER');
   return u;
 }
 
@@ -184,22 +190,22 @@ function connexion(identifiant, motDePasse) {
   }
   const jeton = creerSession_(u);
   journaliser_(u, 'connexion', u.email);
-  return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role };
+  return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role, mdp_a_changer: u.mdp_a_changer === 'oui' };
 }
 
 function moi(jeton) {
-  return exigerConnexion_(jeton);
+  return exigerConnexion_(jeton, true);
 }
 
 /** Un utilisateur connecté (encadreur ou administrateur) change son propre mot de passe. */
 function changerMonMotDePasse(jeton, ancien, nouveau) {
-  const courant = exigerConnexion_(jeton);
+  const courant = exigerConnexion_(jeton, true);
   const u = trouverParId_(FEUILLES.UTILISATEURS, courant.id);
   if (!u || !motDePasseValide_(ancien, u.mdp_hash, u.mdp_sel)) throw new Error('Le mot de passe actuel est incorrect.');
   motDePasseValideFormat_(nouveau);
   if (String(nouveau) === String(ancien)) throw new Error("Le nouveau mot de passe doit être différent de l'actuel.");
   const paire = hacherMotDePasse_(String(nouveau));
-  mettreAJour_(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel });
+  mettreAJour_(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel, mdp_a_changer: '' });
   invaliderSessionsUtilisateur_(u.id, jeton); // les autres appareils devront se reconnecter
   journaliser_(courant, 'compte.mot_de_passe', courant.email, 'changé par son titulaire');
   return { ok: true };

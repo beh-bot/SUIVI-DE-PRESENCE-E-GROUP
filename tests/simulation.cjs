@@ -423,8 +423,74 @@ test('journal : les actions sont tracées, sans secret, et lisibles par l\'admin
   const lu = S.listerJournal(admin.jeton);
   assert.deepStrictEqual([lu[0].action, lu[0].cible, lu[0].detail], ['compte.creer', 'bamba.seydou', 'enseignant']);
   assert(!('utilisateur_id' in lu[0]));
-  echoue(() => S.listerJournal(S.connexion('bamba.seydou', 'motdepasse5').jeton), /réservée/);
+  const s = S.connexion('bamba.seydou', 'motdepasse5');
+  S.changerMonMotDePasse(s.jeton, 'motdepasse5', 'motdepasse5-perso');
+  echoue(() => S.listerJournal(s.jeton), /réservée/);
   assert(enc.id);
+});
+
+test('mot de passe choisi par l\'administrateur : rien n\'est possible avant de l\'avoir changé', () => {
+  S.creerUtilisateur(admin.jeton, { nom: 'Koffi Jean', email: 'koffi.jean', mot_de_passe: 'provisoire1', role: 'enseignant' });
+  const s = S.connexion('koffi.jean', 'provisoire1');
+  assert.strictEqual(s.mdp_a_changer, true);
+  assert.strictEqual(S.moi(s.jeton).mdp_a_changer, true);
+  // Le serveur refuse tout, pas seulement l'écran.
+  echoue(() => S.listerSeances(s.jeton, {}), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.listerClasses(s.jeton), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.pointerEleve(s.jeton, seance.id, 'x', 'present', ''), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.changerMonMotDePasse(s.jeton, 'provisoire1', 'provisoire1'), /différent/);
+  S.changerMonMotDePasse(s.jeton, 'provisoire1', 'bien-a-moi-1');
+  assert.strictEqual(S.moi(s.jeton).mdp_a_changer, false);
+  assert.deepStrictEqual(S.listerSeances(s.jeton, {}), []);
+  assert.strictEqual(S.connexion('koffi.jean', 'bien-a-moi-1').mdp_a_changer, false);
+  // L'administrateur remplace le mot de passe d'un autre : même obligation. Le sien : non.
+  const koffi = S.listerUtilisateurs(admin.jeton).find((u) => u.email === 'koffi.jean');
+  S.modifierUtilisateur(admin.jeton, koffi.id, { nom: 'Koffi Jean', email: 'koffi.jean', role: 'enseignant', mot_de_passe: 'remplace-99' });
+  assert.strictEqual(S.connexion('koffi.jean', 'remplace-99').mdp_a_changer, true);
+  S.modifierUtilisateur(admin.jeton, admin.id, { nom: 'Awa Admin', email: 'awa.admin', role: 'admin', mot_de_passe: 'motdepasse1-ter' });
+  assert.strictEqual(S.moi(admin.jeton).mdp_a_changer, false);
+  // Un compte créé par invitation a choisi son mot de passe lui-même.
+  const inv = S.creerInvitation(admin.jeton, { nom: 'Invité', role: 'enseignant' });
+  assert.strictEqual(S.moi(S.accepterInvitation(inv.id, { nom: 'Invité Libre', email: 'invite.libre', mot_de_passe: 'choisi-par-moi' }).jeton).mdp_a_changer, false);
+});
+
+test('classes : une seule écriture par classe, renommage et fusion', () => {
+  // « 6ez » et « 6E  Z » rejoignent la classe « 6e Z » existante.
+  const e = S.creerEleve(admin.jeton, { nom: 'Gnagne', prenom: 'Eric', classe: '6ez', parent_nom: 'P', parent_whatsapp: '+2250700000150' });
+  assert.strictEqual(e.classe, '6e Z');
+  assert.strictEqual(S.creerSeance(admin.jeton, { matiere: 'Musique', date_seance: '2026-11-21', heure_debut: '09:00', classe: '6E  Z' }).classe, '6e Z');
+  // Import : une classe nouvelle écrite de deux façons dans la même liste n'en fait qu'une.
+  S.importerEleves(admin.jeton, 'Aka;Paul;5e B;P;+2250700000151\nAka;Lea;5eb;P;+2250700000152', false);
+  assert.deepStrictEqual(S.listerEleves(admin.jeton).filter((x) => x.nom === 'Aka').map((x) => x.classe), ['5e B', '5e B']);
+  // Renommage : élèves et séances suivent, en deux écritures.
+  const nbEleves = S.listerEleves(admin.jeton).filter((x) => x.classe === '6e Z').length;
+  const r = S.renommerClasse(admin.jeton, '6e Z', '6e Zoulou');
+  assert.strictEqual(r.fusion, false);
+  assert.strictEqual(r.eleves, nbEleves);
+  assert(r.seances >= 2);
+  assert.strictEqual(S.listerEleves(admin.jeton).filter((x) => x.classe === '6e Z').length, 0);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).seance.classe, '6e Zoulou');
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.filter((x) => x.statut).length, 3, 'les pointages suivent la classe renommée');
+  assert(!S.listerClasses(admin.jeton).includes('6e Z'));
+  // Fusion : donner le nom d'une classe existante (à la casse près) réunit les deux.
+  const f = S.renommerClasse(admin.jeton, '5e B', '6e zoulou');
+  assert.deepStrictEqual([f.fusion, f.classe, f.eleves], [true, '6e Zoulou', 2]);
+  echoue(() => S.renommerClasse(admin.jeton, 'Inexistante', 'X'), /introuvable/);
+  echoue(() => S.renommerClasse(admin.jeton, '6e Zoulou', '6e Zoulou'), /identique/);
+  echoue(() => S.renommerClasse(admin.jeton, '6e Zoulou', '  '), /obligatoire/);
+  assert(S.listerJournal(admin.jeton).some((l) => l.action === 'classe.fusionner' && l.cible === '5e B → 6e Zoulou'));
+  assert(!verrou.tenu);
+});
+
+test('listes longues : 200 lignes par défaut, davantage sur demande', () => {
+  assert.deepStrictEqual([undefined, 0, 'abc', 50, 200, 400.7, 99999].map(S.limiteListe_), [200, 200, 200, 200, 200, 400, 2000]);
+  const lot = Array.from({ length: 230 }, (_, i) => ({ matiere: 'Lot', date_seance: '2025-01-01', heure_debut: '08:00', classe: 'Lot ' + i, enseignant_id: admin.id }));
+  S.insererPlusieurs_(S.FEUILLES.SEANCES, lot);
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).length, 200);
+  const plus = S.listerSeances(admin.jeton, { limite: 400 });
+  assert(plus.length > 230 && plus.length < 400);
+  assert(plus[0].date_seance >= plus[plus.length - 1].date_seance, 'les plus récentes d\'abord');
+  assert(Array.isArray(S.listerNotifications(admin.jeton, null, 400)));
 });
 
 test('journal : un classeur sans feuille Journal la reçoit, et une panne du journal ne bloque pas l\'action', () => {

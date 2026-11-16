@@ -31,7 +31,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `tests/apercu-local.cjs` | Aperçu de l'application dans le navigateur, sans Google |
 | `DOCS/` | Explication de chaque modification, et audit de ce qu'il reste à faire |
 
-Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`, `Journal`. Un élève est rattaché à une séance par le texte de sa **classe**, qui doit être écrit exactement pareil des deux côtés.
+Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`, `Journal`. Un élève est rattaché à une séance par le texte de sa **classe**. Une classe saisie avec une autre casse ou d'autres espaces est ramenée à l'écriture existante.
 
 ## Installation
 
@@ -87,7 +87,7 @@ Ouvre l'application sur http://localhost:8765 avec des données de démonstratio
 ## Limites connues
 
 - Chaque requête relit les feuilles concernées en entier : l'application convient à un centre, pas à des dizaines de milliers de pointages.
-- Les listes de séances et de messages sont limitées aux 200 plus récentes.
+- Les listes de séances et de messages affichent 200 lignes, puis 200 de plus à la demande, jusqu'à 2 000.
 - Les sauvegardes sont sur le même compte Google que le classeur : elles protègent d'une erreur, pas de la perte du compte.
 - Un « Absent » envoie le message tout de suite ; un pointage fait par erreur ne peut pas être rattrapé auprès du parent.
 - « Envoyé » signifie accepté par Meta, pas remis au parent.

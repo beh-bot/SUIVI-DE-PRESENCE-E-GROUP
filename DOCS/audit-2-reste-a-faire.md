@@ -28,7 +28,7 @@ Aucun point critique, mais plusieurs faiblesses.
 | P2 | Jetons de session stockés en clair | **Fait (fiche 10).** Seule l'empreinte SHA-256 du jeton est stockée. Chaque utilisateur se reconnecte une fois après la mise à jour |
 | P2 | Sessions dans les propriétés du script | Ce stockage est limité en taille et n'est nettoyé qu'à la connexion. Chaque connexion relit toutes les propriétés |
 | P2 | Lien d'invitation administrateur | Quiconque obtient le lien devient administrateur. Il est envoyé par WhatsApp et stocké en clair dans la feuille `Invitations` |
-| P2 | Mots de passe choisis par l'administrateur | Il les connaît, les transmet par messagerie, et rien n'oblige l'encadreur à les changer à la première connexion |
+| P2 | Mots de passe choisis par l'administrateur | **Fait (fiche 11).** Le titulaire doit le remplacer à sa première connexion ; le serveur refuse tout autre appel d'ici là |
 | P2 | Aucun journal des actions | **Fait (fiche 10).** Feuille Journal et page Journal des actions. Il n'est pas infalsifiable et grandit sans limite |
 | P3 | Règle de mot de passe minimale | 8 caractères, sans vérification contre les mots de passe courants |
 | P3 | Page `?test=1` publique | Elle révèle si l'installation est terminée |
@@ -42,7 +42,7 @@ Hors du code, un point pèse plus que tous les autres : **toute personne ayant a
 |---|---|---|
 | P1 | Aucune sauvegarde | **Fait (fiche 08).** Sauvegarde manuelle et sauvegarde automatique chaque nuit sur sept jours. Il reste à l'activer depuis le menu et à faire un essai de restauration |
 | P2 | Le lien élève–séance passe par le texte de la classe | Un élève qui change de classe disparaît des feuilles de présence de ses anciennes séances, et le nombre d'élèves attendus change rétroactivement. Il manque une table d'inscription, ou une copie de la liste au moment de la séance |
-| P2 | La classe est un texte libre | « 3e A » et « 3eA » sont deux classes différentes. Il manque une table `Classes` et une liste fermée |
+| P2 | La classe est un texte libre | **Atténué (fiche 11).** Une classe mal écrite rejoint la classe existante, et une classe peut être renommée ou réunie à une autre. Il n'y a toujours pas de table `Classes` |
 | P2 | Supprimer un élève efface son historique | **Fait (fiche 08).** Élèves et séances passent par une corbeille ; l'effacement réel demande un second geste |
 | P3 | La corbeille ne se vide jamais | Aucune durée de conservation n'est appliquée aux élèves et séances retirés |
 | P2 | Données personnelles de mineurs | Noms d'élèves et numéros de parents sont stockés sans mention d'information, de durée de conservation, ni de consentement à recevoir des messages. À vérifier au regard de la loi ivoirienne sur les données personnelles |
@@ -58,7 +58,7 @@ Ce sont les manques que les utilisateurs rencontreront en premier.
 | P2 | Impossible de modifier une séance | **Fait (fiche 09).** La classe se fige dès le premier pointage |
 | P2 | Pas d'import d'élèves | **Fait (fiche 09).** Import par copier-coller ou fichier CSV, tout ou rien, sans doublons |
 | P2 | Pas de « tous présents » | **Fait (fiche 09).** Un bouton marque présents les élèves non encore pointés |
-| P2 | Listes limitées à 200 lignes | Les séances et messages plus anciens deviennent invisibles, sans pagination ni filtre par date |
+| P2 | Listes limitées à 200 lignes | **Fait (fiche 11).** Bouton « Afficher les plus anciennes », jusqu'à 2 000 lignes. Pas de filtre par période |
 | P2 | « Envoyé » ne veut pas dire « reçu » | Le statut indique que Meta a accepté le message. Savoir s'il a été remis ou lu demande de recevoir les notifications de Meta (webhook) |
 | P3 | Pas de séances récurrentes | Un cours hebdomadaire se recrée à la main chaque semaine |
 | P3 | Aucun fonctionnement hors connexion | Sur un réseau faible, un pointage qui échoue est perdu, sans file d'attente ni nouvel essai |

@@ -58,12 +58,13 @@ function motDePasseValideFormat_(v) {
 // ── Comptes (encadreurs et administrateurs) ─────────────────────────
 
 /** Utilisée par le menu Google Sheets (premier administrateur) ET par creerUtilisateur() ci-dessous. */
-function creerCompteInterne_(nom, email, motDePasse, role) {
-  return avecVerrou_(() => creerCompteBrut_(nom, email, motDePasse, role));
+function creerCompteInterne_(nom, email, motDePasse, role, mdpAChanger) {
+  return avecVerrou_(() => creerCompteBrut_(nom, email, motDePasse, role, mdpAChanger));
 }
 
 /** Création du compte SANS verrou : à appeler uniquement depuis une section déjà protégée par avecVerrou_(). */
-function creerCompteBrut_(nom, email, motDePasse, role) {
+/** mdpAChanger : vrai quand le mot de passe a été choisi par quelqu'un d'autre que le titulaire du compte. */
+function creerCompteBrut_(nom, email, motDePasse, role, mdpAChanger) {
   const n = texteRequis_(nom, 'Le nom', 80);
   const e = identifiantValide_(email);
   const m = motDePasseValideFormat_(motDePasse);
@@ -72,7 +73,7 @@ function creerCompteBrut_(nom, email, motDePasse, role) {
   }
   const paire = hacherMotDePasse_(m);
   return inserer_(FEUILLES.UTILISATEURS, {
-    nom: n, email: e, mdp_hash: paire.hash, mdp_sel: paire.sel, role: role, actif: true,
+    nom: n, email: e, mdp_hash: paire.hash, mdp_sel: paire.sel, role: role, actif: true, mdp_a_changer: mdpAChanger ? 'oui' : '',
   });
 }
 
@@ -170,7 +171,7 @@ function creerUtilisateur(jeton, champs) {
   const admin = exigerAdmin_(jeton);
   champs = champs || {};
   const role = champs.role === 'admin' ? 'admin' : 'enseignant';
-  const u = creerCompteInterne_(champs.nom, champs.email, champs.mot_de_passe, role);
+  const u = creerCompteInterne_(champs.nom, champs.email, champs.mot_de_passe, role, true);
   journaliser_(admin, 'compte.creer', u.email, u.role);
   return { id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
@@ -190,6 +191,7 @@ function modifierUtilisateur(jeton, id, champs) {
     const paire = hacherMotDePasse_(champs.mot_de_passe);
     patch.mdp_hash = paire.hash;
     patch.mdp_sel = paire.sel;
+    patch.mdp_a_changer = id !== moiCourant.id ? 'oui' : ''; // remplacé pour quelqu'un d'autre : il devra le changer
   }
   // Vérification du doublon et écriture dans la même section verrouillée (sinon deux modifications
   // simultanées pourraient donner le même identifiant à deux comptes).
@@ -260,6 +262,56 @@ function listerEleves(jeton) {
     .sort((a, b) => a.classe.localeCompare(b.classe) || a.nom.localeCompare(b.nom));
 }
 
+/** Clé de comparaison d'une classe : sans majuscules, accents, espaces ni ponctuation. « 3e A », « 3eA » et « 3E a » donnent la même clé. */
+function cleClasse_(classe) {
+  return String(classe).toLowerCase().normalize('NFD').replace(/[^a-z0-9]/g, '');
+}
+
+/** Pour chaque clé, l'écriture déjà utilisée dans le classeur (élèves et séances, corbeille comprise). */
+function indexClasses_() {
+  const index = {};
+  versObjets_(FEUILLES.ELEVES).concat(versObjets_(FEUILLES.SEANCES)).forEach((o) => {
+    const cle = cleClasse_(o.classe);
+    if (cle && !index[cle]) index[cle] = o.classe;
+  });
+  return index;
+}
+
+/**
+ * Ramène une classe saisie à l'écriture déjà en usage si elle n'en diffère que par la casse, les
+ * espaces ou les accents. Un élève saisi en « 3eA » rejoint ainsi la classe « 3e A » existante au
+ * lieu d'en créer une seconde, que l'appel ne retrouverait pas.
+ */
+function classeCanonique_(classe, index) {
+  return (index || indexClasses_())[cleClasse_(classe)] || classe;
+}
+
+/**
+ * Renomme une classe partout (élèves et séances). Si le nouveau nom désigne une classe qui existe
+ * déjà, les deux sont fusionnées : c'est le moyen de réparer deux écritures d'une même classe.
+ */
+function renommerClasse(jeton, ancienne, nouvelle) {
+  const u = exigerAdmin_(jeton);
+  const cible = texteRequis_(nouvelle, 'Le nouveau nom', 40);
+  const resultat = avecVerrou_(() => {
+    const existantes = {};
+    versObjets_(FEUILLES.ELEVES).concat(versObjets_(FEUILLES.SEANCES)).forEach((o) => (existantes[o.classe] = true));
+    if (typeof ancienne !== 'string' || !existantes[ancienne]) throw new Error('Classe introuvable.');
+    // Une autre classe porte déjà ce nom, à la casse ou aux espaces près : on reprend son écriture exacte.
+    const jumelle = Object.keys(existantes).find((c) => c !== ancienne && cleClasse_(c) === cleClasse_(cible));
+    const finale = jumelle || cible;
+    if (finale === ancienne) throw new Error('Le nouveau nom est identique à l\'ancien.');
+    return {
+      classe: finale, fusion: !!jumelle,
+      eleves: remplacerDansColonne_(FEUILLES.ELEVES, 'classe', ancienne, finale),
+      seances: remplacerDansColonne_(FEUILLES.SEANCES, 'classe', ancienne, finale),
+    };
+  });
+  journaliser_(u, resultat.fusion ? 'classe.fusionner' : 'classe.renommer', ancienne + ' → ' + resultat.classe,
+    resultat.eleves + ' élève(s), ' + resultat.seances + ' séance(s)');
+  return resultat;
+}
+
 function listerClasses(jeton) {
   exigerConnexion_(jeton);
   const c1 = actifs_(FEUILLES.ELEVES).map((e) => e.classe);
@@ -269,11 +321,12 @@ function listerClasses(jeton) {
   return Object.keys(toutes).sort();
 }
 
-function validerEleve_(champs) {
+function validerEleve_(champs, indexClasses) {
+  champs = champs || {};
   return {
     nom: texteRequis_(champs.nom, 'Le nom', 80),
     prenom: texteRequis_(champs.prenom, 'Le prénom', 80),
-    classe: texteRequis_(champs.classe, 'La classe', 40),
+    classe: classeCanonique_(texteRequis_(champs.classe, 'La classe', 40), indexClasses),
     parent_nom: texteRequis_(champs.parent_nom, 'Le nom du parent ou tuteur', 80),
     parent_whatsapp: telephoneE164_(champs.parent_whatsapp),
   };
@@ -347,6 +400,7 @@ function importerEleves(jeton, texte, simulation) {
 
   const erreurs = [];
   const valides = [];
+  const indexClasses = indexClasses_(); // lu une fois pour toute la liste
   lignes.forEach((l) => {
     try {
       if (l.cellules.length < IMPORT_COLONNES.length) {
@@ -354,7 +408,10 @@ function importerEleves(jeton, texte, simulation) {
       }
       const champs = {};
       IMPORT_COLONNES.forEach((c, i) => (champs[c] = l.cellules[i]));
-      valides.push(validerEleve_(champs));
+      const eleve = validerEleve_(champs, indexClasses);
+      // Une classe nouvelle écrite de deux façons dans la même liste : la première écriture l'emporte.
+      if (!indexClasses[cleClasse_(eleve.classe)]) indexClasses[cleClasse_(eleve.classe)] = eleve.classe;
+      valides.push(eleve);
     } catch (e) {
       erreurs.push({ ligne: l.numero, message: e.message });
     }
@@ -516,8 +573,18 @@ function listerSeances(jeton, filtres) {
       });
     })
     .sort((a, b) => (b.date_seance + b.heure_debut).localeCompare(a.date_seance + a.heure_debut))
-    .slice(0, 200);
+    .slice(0, limiteListe_(filtres.limite));
 }
+
+/**
+ * Nombre de lignes renvoyées par une liste : 200 par défaut, plus si l'écran le demande (bouton
+ * « Afficher les plus anciennes »), sans dépasser 2000 pour ne pas saturer le navigateur.
+ */
+function limiteListe_(demande) {
+  const n = Math.floor(Number(demande)) || PAS_LISTE;
+  return Math.min(Math.max(n, PAS_LISTE), 2000);
+}
+const PAS_LISTE = 200;
 
 function validerSeance_(champs, enseignantParDefaut) {
   champs = champs || {};
@@ -528,7 +595,7 @@ function validerSeance_(champs, enseignantParDefaut) {
     matiere: texteRequis_(champs.matiere, 'La matière', 60),
     date_seance: dateIsoValide_(champs.date_seance),
     heure_debut: heureValide_(champs.heure_debut),
-    classe: texteRequis_(champs.classe, 'La classe', 40),
+    classe: classeCanonique_(texteRequis_(champs.classe, 'La classe', 40)),
     enseignant_id: enseignantId,
   };
 }

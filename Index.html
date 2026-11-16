@@ -209,7 +209,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     modale.innerHTML = html;
     modale.onclick = (e) => { if (e.target === modale || e.target.closest('[data-fermer]')) modale.close(); };
     modale.onclose = null;
-    modale.showModal();
+    modale.oncancel = null;
+    if (!modale.open) modale.showModal();
   }
   function confirmer({ titre, message, bouton, danger = false }) {
     return new Promise((resolve) => {
@@ -254,6 +255,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
 
   function gererErreur(e) {
     if (e && e.message === 'SESSION_EXPIREE') { afficherConnexion('Votre session a expiré. Reconnectez-vous.'); return true; }
+    if (e && e.message === 'MOT_DE_PASSE_A_CHANGER') { if (utilisateur) utilisateur.mdp_a_changer = true; ouvrirFormMdp(true); return true; }
     toast(e ? e.message : 'Une erreur est survenue.', 'erreur', true);
     return false;
   }
@@ -387,9 +389,17 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         </div></div></a></li>`;
   }
 
+  // Listes longues : le serveur renvoie 200 lignes ; ce bouton en redemande 200 de plus.
+  const PAS_LISTE = 200;
+  const limites = { seances: PAS_LISTE, messages: PAS_LISTE };
+  function boutonPlusAnciennes(liste, nbRecues) {
+    if (nbRecues < limites[liste]) return ''; // tout est déjà affiché
+    return `<div class="mt-4 text-center"><button type="button" data-action="plus-anciennes" data-liste="${liste}" class="btn btn-secondaire">Afficher les plus anciennes</button></div>`;
+  }
+
   async function vueSeances() {
     const admin = estAdmin();
-    const [seances, classes] = await Promise.all([api('listerSeances', {}), admin ? api('listerClasses') : Promise.resolve([])]);
+    const [seances, classes] = await Promise.all([api('listerSeances', { limite: limites.seances }), admin ? api('listerClasses') : Promise.resolve([])]);
     const aujourd = dateLocale();
     const groupes = [];
     seances.forEach((s) => {
@@ -410,6 +420,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div>
       ${admin ? '' : '<p class="text-ardoise">Touchez une séance pour faire l\'appel : Présent ou Absent.</p>'}
       ${liste}
+      ${boutonPlusAnciennes('seances', seances.length)}
       ${admin ? LIEN_CORBEILLE : ''}` };
   }
 
@@ -593,7 +604,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const parClasse = new Map();
     filtres.forEach((e) => parClasse.set(e.classe, [...(parClasse.get(e.classe) || []), e]));
     return [...parClasse].map(([classe, liste]) => `
-      <h2 class="titre-section">${esc(classe)} <span class="font-normal text-ardoise">(${liste.length})</span></h2>
+      <h2 class="titre-section flex flex-wrap items-center justify-between gap-2"><span>${esc(classe)} <span class="font-normal text-ardoise">(${liste.length})</span></span>
+        <button type="button" data-action="renommer-classe" data-classe="${esc(classe)}" class="text-sm font-normal text-ardoise underline">Renommer la classe</button></h2>
       <ul class="liste">${liste.map((e) => `
         <li class="px-4 py-3">
           <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
@@ -640,6 +652,21 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <div class="mt-5 flex justify-end gap-2">
         <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
         <button type="submit" class="btn btn-primaire">${eleve ? 'Enregistrer les modifications' : "Ajouter l'élève"}</button>
+      </div></form>`);
+  }
+
+  function ouvrirFormClasse(classe) {
+    const autres = [...new Set(listeElevesCourante.map((e) => e.classe))].filter((c) => c !== classe);
+    ouvrirModale(`<form data-form="classe" data-classe="${esc(classe)}" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">Renommer la classe ${esc(classe)}</h2>
+      <p class="mt-2 text-sm text-ardoise">Le nouveau nom s'applique à tous ses élèves et à toutes ses séances. Si vous donnez le nom d'une classe qui existe déjà, les deux classes sont réunies en une seule.</p>
+      <div class="mt-4"><label class="etiquette" for="cl-nom">Nouveau nom</label>
+        <input class="champ" id="cl-nom" name="nouvelle" list="liste-classes-r" required maxlength="40" autocomplete="off" value="${esc(classe)}">
+        <datalist id="liste-classes-r">${autres.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        <button type="submit" class="btn btn-primaire">Renommer</button>
       </div></form>`);
   }
 
@@ -741,6 +768,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     'eleve.creer': 'Élève ajouté', 'eleve.modifier': 'Élève modifié', 'eleve.importer': "Import d'élèves",
     'eleve.corbeille': 'Élève mis à la corbeille', 'eleve.retablir': 'Élève rétabli', 'eleve.effacer': 'Élève supprimé définitivement',
     'seance.creer': 'Séance créée', 'seance.modifier': 'Séance modifiée',
+    'classe.renommer': 'Classe renommée', 'classe.fusionner': 'Classes réunies',
     'seance.corbeille': 'Séance mise à la corbeille', 'seance.retablir': 'Séance rétablie', 'seance.effacer': 'Séance supprimée définitivement',
   };
   async function vueJournal() {
@@ -795,7 +823,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const texte = `Application : ${urlApp || location.href}\nIdentifiant : ${email}\nMot de passe : ${mdp}`;
     ouvrirModale(`<div class="p-5">
       <h2 class="text-lg font-semibold">${esc(titre)}</h2>
-      <p class="mt-2 text-sm text-ardoise">Transmettez ces identifiants à ${esc(nom)}. Le mot de passe ne pourra plus être affiché ensuite.</p>
+      <p class="mt-2 text-sm text-ardoise">Transmettez ces identifiants à ${esc(nom)}. Le mot de passe ne pourra plus être affiché ensuite, et il devra être remplacé à la première connexion.</p>
       <dl class="mt-4 space-y-2 rounded-lg bg-papier p-3 text-sm">
         <div><dt class="text-ardoise">Adresse de l'application</dt><dd class="break-all font-medium">${esc(urlApp || location.href)}</dd></div>
         <div><dt class="text-ardoise">Identifiant</dt><dd class="break-all font-medium">${esc(email)}</dd></div>
@@ -808,9 +836,12 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   }
   const lienWhatsApp = (lien) => 'https://wa.me/?text=' + encodeURIComponent(`Bonjour, voici votre lien pour créer votre compte Excellence Group (valable 7 jours, un seul usage) : ${lien}`);
 
-  function ouvrirFormMdp() {
+  // obligatoire = vrai : le mot de passe a été choisi par l'administrateur. La fenêtre ne se ferme
+  // alors qu'en changeant le mot de passe ou en se déconnectant (le serveur refuse tout le reste).
+  function ouvrirFormMdp(obligatoire = false) {
     ouvrirModale(`<form data-form="mdp" class="p-5" novalidate>
-      <h2 class="text-lg font-semibold">Changer mon mot de passe</h2>
+      <h2 class="text-lg font-semibold">${obligatoire ? 'Choisissez votre mot de passe' : 'Changer mon mot de passe'}</h2>
+      ${obligatoire ? `<p class="mt-2 text-sm text-ardoise">Votre mot de passe actuel a été choisi par l'administrateur. Remplacez-le par un mot de passe que vous êtes seul à connaître pour continuer.</p>` : ''}
       <div class="mt-4 space-y-3">
         <div><label class="etiquette" for="m-ancien">Mot de passe actuel</label>
           <input class="champ" id="m-ancien" name="ancien" type="password" autocomplete="current-password" required></div>
@@ -822,9 +853,14 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div>
       <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
       <div class="mt-5 flex justify-end gap-2">
-        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        ${obligatoire ? '<button type="button" data-action="deconnexion" class="btn btn-secondaire">Se déconnecter</button>'
+          : '<button type="button" data-fermer class="btn btn-secondaire">Annuler</button>'}
         <button type="submit" class="btn btn-primaire">Enregistrer</button>
       </div></form>`);
+    if (obligatoire) {
+      modale.onclick = null; // un clic à côté ne ferme pas la fenêtre
+      modale.oncancel = (e) => e.preventDefault(); // la touche Échap non plus
+    }
   }
   function ouvrirFormInvitation() {
     ouvrirModale(`<form data-form="invitation" class="p-5" novalidate>
@@ -908,7 +944,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   const STATUTS_MSG = { envoye: ['Envoyé', 'bg-present-pale text-present'], echoue: ['Échoué', 'bg-absent-pale text-absent'], en_attente: ['En cours', 'bg-attente-pale text-attente'] };
   async function vueMessages(requete = '') {
     const statut = new URLSearchParams(requete).get('statut') || '';
-    const lignes = await api('listerNotifications', statut || null);
+    const lignes = await api('listerNotifications', statut || null, limites.messages);
     const onglet = (v, l) => `<a href="#/messages${v ? `?statut=${v}` : ''}" ${statut === v ? 'aria-current="true"' : ''} class="btn btn-petit ${statut === v ? 'btn-primaire' : 'btn-secondaire'}">${l}</a>`;
     const liste = lignes.length
       ? `<ul class="liste">${lignes.map((n) => { const [libelle, style] = STATUTS_MSG[n.statut] || [n.statut, 'bg-papier text-ardoise']; return `<li class="px-4 py-3">
@@ -927,7 +963,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <h1 class="titre-page">Messages aux parents</h1>
       <p class="text-ardoise">Journal des notifications WhatsApp d'absence.</p>
       <div class="mb-4 mt-4 flex flex-wrap gap-2">${onglet('', 'Tous')}${onglet('echoue', 'Échoués')}${onglet('envoye', 'Envoyés')}${onglet('en_attente', 'En cours')}</div>
-      ${liste}` };
+      ${liste}
+      ${boutonPlusAnciennes('messages', lignes.length)}` };
   }
 
   // ── Événements globaux ────────────────────────────────────────────────
@@ -1011,6 +1048,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     },
     'modifier-seance': () => { if (pt) ouvrirFormSeance(pt.seance).catch((e) => toast(e.message, 'erreur')); },
     'importer-eleves': () => ouvrirFormImport(),
+    'renommer-classe': (el) => ouvrirFormClasse(el.dataset.classe),
+    'plus-anciennes': (el) => { limites[el.dataset.liste] += PAS_LISTE; router(); },
     'pointer-restants': (el) => pointerRestants(el),
     pointer: (el) => pointer(el.dataset.eleve, el.dataset.statut),
     renvoyer: (el) => renvoyer(el.dataset.notif),
@@ -1051,6 +1090,12 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       const s = await api('creerSeance', donnees);
       modale.close(); location.hash = `#/seances/${esc(s.id)}`;
     },
+    async classe(donnees, form) {
+      const rep = await api('renommerClasse', form.dataset.classe, donnees.nouvelle);
+      modale.close();
+      toast(`${rep.fusion ? 'Classes réunies sous le nom' : 'Classe renommée en'} ${rep.classe} : ${pluriel(rep.eleves, 'élève', 'élèves')}, ${pluriel(rep.seances, 'séance', 'séances')}.`, 'succes');
+      router();
+    },
     // Deux temps : une vérification sans rien écrire, puis l'import après confirmation du bilan.
     async import(donnees) {
       const texte = donnees.texte;
@@ -1082,7 +1127,10 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     async mdp(donnees) {
       if (donnees.nouveau !== donnees.confirmation) throw new Error('Les deux mots de passe ne sont pas identiques.');
       await api('changerMonMotDePasse', donnees.ancien, donnees.nouveau);
+      const etaitObligatoire = utilisateur && utilisateur.mdp_a_changer;
+      if (utilisateur) utilisateur.mdp_a_changer = false;
       modale.close(); toast('Mot de passe modifié.', 'succes');
+      if (etaitObligatoire) router();
     },
     async invitation(donnees) {
       const inv = await api('creerInvitation', { nom: donnees.nom, role: donnees.role });
@@ -1115,6 +1163,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   // ── Connexion / démarrage ─────────────────────────────────────────────
   function afficherConnexion(message) {
     jeton = ''; stockage.removeItem('sp_jeton'); utilisateur = null;
+    if (modale.open) modale.close();
     $('#app').classList.add('hidden');
     $('#ecran-invitation').classList.add('hidden');
     $('#ecran-connexion').classList.remove('hidden');
@@ -1136,6 +1185,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     appel('urlApplication').then((u) => { urlApp = u; }).catch(() => {});
     $('#nom-utilisateur').textContent = utilisateur.nom;
     appliquerRole();
+    if (utilisateur.mdp_a_changer) { vue.innerHTML = ''; ouvrirFormMdp(true); return; }
     router();
   }
 
@@ -1148,7 +1198,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     try {
       const rep = await appel('connexion', $('#c-email').value, $('#c-mdp').value);
       jeton = rep.jeton; stockage.setItem('sp_jeton', jeton);
-      utilisateur = { id: rep.id, nom: rep.nom, email: rep.email, role: rep.role };
+      utilisateur = { id: rep.id, nom: rep.nom, email: rep.email, role: rep.role, mdp_a_changer: rep.mdp_a_changer };
       afficherApp();
     } catch (e2) {
       err.textContent = e2.message; err.classList.remove('hidden');

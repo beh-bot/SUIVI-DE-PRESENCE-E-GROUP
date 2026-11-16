@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 const FEUILLES = {
-  UTILISATEURS: { nom: 'Utilisateurs', entetes: ['id', 'nom', 'email', 'mdp_hash', 'mdp_sel', 'role', 'actif', 'cree_le'] },
+  UTILISATEURS: { nom: 'Utilisateurs', entetes: ['id', 'nom', 'email', 'mdp_hash', 'mdp_sel', 'role', 'actif', 'cree_le', 'mdp_a_changer'] }, // mdp_a_changer : 'oui' tant que le mot de passe choisi par l'administrateur n'a pas été remplacé par son titulaire
   // supprime_le : vide = actif ; une date = placé dans la corbeille à ce moment (voir actifs_ et la corbeille dans Api.gs).
   ELEVES: { nom: 'Eleves', entetes: ['id', 'nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp', 'cree_le', 'supprime_le'] },
   SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le', 'supprime_le'] },
@@ -274,6 +274,33 @@ function insererPlusieurs_(def, objets) {
     zone.setValues(lignes);
     delete cacheFeuilles[def.nom];
     return complets;
+  });
+}
+
+/**
+ * Remplace une valeur par une autre dans toute une colonne, en une seule écriture (lignes de la
+ * corbeille comprises). Renvoie le nombre de lignes modifiées.
+ */
+function remplacerDansColonne_(def, colonne, ancienne, nouvelle) {
+  return avecVerrou_(() => {
+    const s = feuille_(def);
+    const dernier = s.getLastRow();
+    const indice = def.entetes.indexOf(colonne);
+    if (indice < 0) throw new Error('Colonne inconnue : ' + colonne);
+    if (dernier < 2) return 0;
+    const zone = s.getRange(2, indice + 1, dernier - 1, 1);
+    let nb = 0;
+    const valeurs = zone.getValues().map((ligne) => {
+      if (String(normaliserValeur_(colonne, ligne[0])) !== ancienne) return ligne;
+      nb++;
+      return [nouvelle];
+    });
+    if (nb) {
+      zone.setNumberFormat(estColonneTexte_(colonne) ? '@' : 'General');
+      zone.setValues(valeurs);
+      delete cacheFeuilles[def.nom];
+    }
+    return nb;
   });
 }
 

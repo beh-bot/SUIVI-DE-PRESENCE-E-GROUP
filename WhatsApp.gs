@@ -142,7 +142,7 @@ function tenterEnvoi_(notifId, seance, eleve) {
   }
 }
 
-function listerNotifications(jeton, statut) {
+function listerNotifications(jeton, statut, limite) {
   exigerAdmin_(jeton);
   const seances = actifs_(FEUILLES.SEANCES);
   const eleves = actifs_(FEUILLES.ELEVES);
@@ -159,7 +159,7 @@ function listerNotifications(jeton, statut) {
       });
     })
     .sort((a, b) => String(b.maj_le).localeCompare(String(a.maj_le)))
-    .slice(0, 200);
+    .slice(0, limiteListe_(limite));
 }
 
 /** Réservé à l'administrateur, ou à l'enseignant responsable de la séance concernée. */
