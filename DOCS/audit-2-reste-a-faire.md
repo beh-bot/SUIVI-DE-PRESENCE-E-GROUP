@@ -54,10 +54,10 @@ Ce sont les manques que les utilisateurs rencontreront en premier.
 
 | Priorité | Point | Détail |
 |---|---|---|
-| P1 | Message WhatsApp immédiat et sans retour possible | Un « Absent » touché par erreur prévient le parent tout de suite. Il n'y a ni délai d'annulation, ni message correctif |
-| P2 | Impossible de modifier une séance | Une erreur de date ou d'encadreur oblige à supprimer la séance, donc à perdre ses pointages |
-| P2 | Pas d'import d'élèves | Chaque élève se saisit un par un. Un import CSV est indispensable pour une rentrée |
-| P2 | Pas de « tous présents » | Chaque élève demande un clic et un aller-retour de plusieurs secondes avec le serveur. Pour une classe de 30, l'appel est long |
+| P1 | Message WhatsApp immédiat et sans retour possible | Un « Absent » touché par erreur prévient le parent tout de suite. Il n'y a ni délai d'annulation, ni message correctif **À décider** par le responsable du centre : les options sont décrites dans la fiche 09 |
+| P2 | Impossible de modifier une séance | **Fait (fiche 09).** La classe se fige dès le premier pointage |
+| P2 | Pas d'import d'élèves | **Fait (fiche 09).** Import par copier-coller ou fichier CSV, tout ou rien, sans doublons |
+| P2 | Pas de « tous présents » | **Fait (fiche 09).** Un bouton marque présents les élèves non encore pointés |
 | P2 | Listes limitées à 200 lignes | Les séances et messages plus anciens deviennent invisibles, sans pagination ni filtre par date |
 | P2 | « Envoyé » ne veut pas dire « reçu » | Le statut indique que Meta a accepté le message. Savoir s'il a été remis ou lu demande de recevoir les notifications de Meta (webhook) |
 | P3 | Pas de séances récurrentes | Un cours hebdomadaire se recrée à la main chaque semaine |

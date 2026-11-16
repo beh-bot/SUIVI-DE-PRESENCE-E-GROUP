@@ -261,6 +261,95 @@ function creerEleve(jeton, champs) {
   return sansLigne_(inserer_(FEUILLES.ELEVES, validerEleve_(champs)));
 }
 
+// ── Import d'une liste d'élèves ───────────────────────────────────────
+
+const IMPORT_MAX_LIGNES = 500;
+const IMPORT_COLONNES = ['nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp'];
+
+/**
+ * Découpe un texte tabulaire en lignes de cellules. Le séparateur est deviné sur la première
+ * ligne : tabulation (copier-coller depuis un tableur), point-virgule (CSV français) ou virgule.
+ * Les guillemets sont gérés : "Koné; Adama" est une seule cellule, "" représente un guillemet.
+ */
+function analyserCsv_(texte) {
+  const t = String(texte || '').replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  const premiere = t.split('\n')[0];
+  const sep = premiere.indexOf('\t') >= 0 ? '\t' : premiere.indexOf(';') >= 0 ? ';' : ',';
+  const lignes = [];
+  let ligne = [];
+  let cellule = '';
+  let entreGuillemets = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (entreGuillemets) {
+      if (c === '"' && t[i + 1] === '"') { cellule += '"'; i++; }
+      else if (c === '"') entreGuillemets = false;
+      else cellule += c;
+    } else if (c === '"' && cellule === '') entreGuillemets = true;
+    else if (c === sep) { ligne.push(cellule); cellule = ''; }
+    else if (c === '\n') { ligne.push(cellule); lignes.push(ligne); ligne = []; cellule = ''; }
+    else cellule += c;
+  }
+  ligne.push(cellule);
+  lignes.push(ligne);
+  return lignes.map((l) => l.map((x) => x.trim())).filter((l) => l.some((x) => x !== ''));
+}
+
+function cleEleve_(e) {
+  return [e.nom, e.prenom, e.classe].join('|').toLowerCase();
+}
+
+/**
+ * Importe des élèves depuis un texte : une ligne par élève, colonnes dans l'ordre
+ * nom, prénom, classe, nom du parent, numéro WhatsApp. Une première ligne de titres est ignorée.
+ * Tout ou rien : si une seule ligne est invalide, rien n'est enregistré et la liste des erreurs
+ * est renvoyée. Un élève déjà présent (même nom, prénom et classe) est ignoré, pas dupliqué.
+ * Avec simulation = true, rien n'est écrit : on obtient seulement le bilan.
+ */
+function importerEleves(jeton, texte, simulation) {
+  exigerAdmin_(jeton);
+  if (typeof texte !== 'string' || !texte.trim()) throw new Error('La liste est vide.');
+  if (texte.length > 200000) throw new Error('La liste est trop longue. Importez-la en plusieurs fois.');
+  let lignes = analyserCsv_(texte).map((cellules, i) => ({ numero: i + 1, cellules: cellules }));
+  const sansAccent = (x) => String(x).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (lignes.length && sansAccent(lignes[0].cellules[0]) === 'nom') lignes = lignes.slice(1); // ligne de titres
+  if (!lignes.length) throw new Error('La liste ne contient aucun élève.');
+  if (lignes.length > IMPORT_MAX_LIGNES) throw new Error(`Pas plus de ${IMPORT_MAX_LIGNES} élèves à la fois. Importez la liste en plusieurs fois.`);
+
+  const erreurs = [];
+  const valides = [];
+  lignes.forEach((l) => {
+    try {
+      if (l.cellules.length < IMPORT_COLONNES.length) {
+        throw new Error(`${l.cellules.length} colonne(s) au lieu de 5 (nom, prénom, classe, parent, numéro WhatsApp).`);
+      }
+      const champs = {};
+      IMPORT_COLONNES.forEach((c, i) => (champs[c] = l.cellules[i]));
+      valides.push(validerEleve_(champs));
+    } catch (e) {
+      erreurs.push({ ligne: l.numero, message: e.message });
+    }
+  });
+  if (erreurs.length) return { ok: false, erreurs: erreurs.slice(0, 50), nb_erreurs: erreurs.length };
+
+  return avecVerrou_(() => {
+    const connus = {};
+    actifs_(FEUILLES.ELEVES).forEach((e) => (connus[cleEleve_(e)] = true));
+    const nouveaux = valides.filter((e) => {
+      if (connus[cleEleve_(e)]) return false;
+      connus[cleEleve_(e)] = true; // évite aussi les doublons à l'intérieur de la liste
+      return true;
+    });
+    if (!simulation) insererPlusieurs_(FEUILLES.ELEVES, nouveaux);
+    const classes = {};
+    nouveaux.forEach((e) => (classes[e.classe] = (classes[e.classe] || 0) + 1));
+    return {
+      ok: true, simulation: !!simulation, ajoutes: nouveaux.length, ignores: valides.length - nouveaux.length,
+      classes: Object.keys(classes).sort().map((c) => ({ classe: c, nb: classes[c] })),
+    };
+  });
+}
+
 function modifierEleve(jeton, id, champs) {
   exigerAdmin_(jeton);
   const donnees = validerEleve_(champs);
@@ -393,19 +482,43 @@ function listerSeances(jeton, filtres) {
     .slice(0, 200);
 }
 
-function creerSeance(jeton, champs) {
-  const u = exigerAdmin_(jeton);
-  const enseignantId = champs.enseignant_id || u.id;
+function validerSeance_(champs, enseignantParDefaut) {
+  champs = champs || {};
+  const enseignantId = champs.enseignant_id || enseignantParDefaut;
   const ens = trouverParId_(FEUILLES.UTILISATEURS, enseignantId);
   if (!ens || !ens.actif) throw new Error('Encadreur introuvable.');
-  const s = inserer_(FEUILLES.SEANCES, {
+  return {
     matiere: texteRequis_(champs.matiere, 'La matière', 60),
     date_seance: dateIsoValide_(champs.date_seance),
     heure_debut: heureValide_(champs.heure_debut),
     classe: texteRequis_(champs.classe, 'La classe', 40),
     enseignant_id: enseignantId,
-  });
+  };
+}
+
+function creerSeance(jeton, champs) {
+  const u = exigerAdmin_(jeton);
+  const s = inserer_(FEUILLES.SEANCES, validerSeance_(champs, u.id));
   return chargerSeanceAvecEnseignant_(s.id);
+}
+
+/**
+ * Corrige une séance (matière, date, heure, encadreur, classe) sans perdre ses pointages.
+ * La classe ne peut plus changer dès qu'un élève a été pointé : les pointages existants
+ * concerneraient des élèves qui ne sont pas dans la nouvelle classe.
+ */
+function modifierSeance(jeton, id, champs) {
+  exigerAdmin_(jeton);
+  avecVerrou_(() => {
+    const actuelle = trouverActifParId_(FEUILLES.SEANCES, id);
+    if (!actuelle) throw new Error('Séance introuvable.');
+    const donnees = validerSeance_(champs, actuelle.enseignant_id);
+    if (donnees.classe !== actuelle.classe && versObjets_(FEUILLES.PRESENCES).some((p) => p.seance_id === id)) {
+      throw new Error("L'appel de cette séance a commencé : sa classe ne peut plus être changée. Créez une autre séance pour l'autre classe.");
+    }
+    mettreAJour_(FEUILLES.SEANCES, id, donnees);
+  });
+  return chargerSeanceAvecEnseignant_(id);
 }
 
 /** « Supprimer » une séance la place dans la corbeille : ses pointages sont conservés mais ne comptent plus. */
@@ -495,6 +608,28 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
 
   if (statut === 'absent') declencherNotificationAbsence_(seance, eleve);
   return lignesPointage_(seance).find((l) => l.id === eleveId);
+}
+
+/**
+ * Marque « présent » tous les élèves de la séance qui n'ont pas encore été pointés, en une seule
+ * écriture. Les élèves déjà pointés (présents ou absents) ne sont pas touchés, et aucun message
+ * n'est envoyé. Usage prévu : pointer d'abord les absents, puis valider le reste d'un geste.
+ */
+function pointerRestantsPresents(jeton, seanceId) {
+  const u = exigerConnexion_(jeton);
+  const seance = chargerSeanceAvecEnseignant_(seanceId);
+  verifierAccesSeance_(seance, u);
+  const nb = avecVerrou_(() => {
+    const dejaPointes = {};
+    versObjets_(FEUILLES.PRESENCES).filter((p) => p.seance_id === seanceId).forEach((p) => (dejaPointes[p.eleve_id] = true));
+    const maintenant = nowIso_();
+    const lignes = actifs_(FEUILLES.ELEVES)
+      .filter((e) => e.classe === seance.classe && !dejaPointes[e.id])
+      .map((e) => ({ seance_id: seanceId, eleve_id: e.id, statut: 'present', motif: '', horodatage: maintenant, pointe_par: u.id }));
+    insererPlusieurs_(FEUILLES.PRESENCES, lignes);
+    return lignes.length;
+  });
+  return { nb_pointes: nb, eleves: lignesPointage_(seance) };
 }
 
 // ── Tableau de bord et export ─────────────────────────────────────────

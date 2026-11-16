@@ -303,4 +303,69 @@ test('suppression définitive : seulement depuis la corbeille, avec les pointage
   assert(!verrou.tenu && verrou.prises > 0);
 });
 
+test('import d\'élèves : séparateurs, guillemets, titres, doublons, tout ou rien', () => {
+  assert.deepStrictEqual(S.analyserCsv_('a;"b;c";"d ""e"""\r\n\r\nf;g;h'), [['a', 'b;c', 'd "e"'], ['f', 'g', 'h']]);
+  assert.deepStrictEqual(S.analyserCsv_('a\tb, c\nd\te'), [['a', 'b, c'], ['d', 'e']]);
+  const avant = S.listerEleves(admin.jeton).length;
+  const liste = [
+    'Nom;Prénom;Classe;Parent;WhatsApp',
+    'Konan;Akissi;6e Z;Mme Konan;+225 07 00 00 01 01',
+    '"Touré";"Ali";6e Z;"M. Touré; père";002250700000102',
+    'Yao;Aya;3e A;M. Yao;+2250700000002', // déjà enregistrée
+    'Konan;akissi;6e Z;Mme Konan;+2250700000101', // doublon dans la liste
+  ].join('\n');
+  // Une ligne fausse : rien n'est écrit, et la ligne est désignée par son numéro dans le texte.
+  const rate = S.importerEleves(admin.jeton, liste + '\nSeul;Nom\nBah;Awa;6e Z;Mme Bah;0700', false);
+  assert.strictEqual(rate.ok, false);
+  assert.deepStrictEqual(rate.erreurs.map((e) => e.ligne), [6, 7]);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, avant);
+  // Simulation : le bilan sans écrire.
+  const bilan = S.importerEleves(admin.jeton, liste, true);
+  assert.deepStrictEqual([bilan.ok, bilan.ajoutes, bilan.ignores, bilan.classes], [true, 2, 2, [{ classe: '6e Z', nb: 2 }]]);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, avant);
+  // Import réel, en une seule écriture.
+  const prises = verrou.prises;
+  assert.strictEqual(S.importerEleves(admin.jeton, liste, false).ajoutes, 2);
+  assert.strictEqual(verrou.prises, prises + 1);
+  const importes = S.listerEleves(admin.jeton).filter((e) => e.classe === '6e Z');
+  assert.deepStrictEqual(importes.map((e) => [e.nom, e.parent_nom, e.parent_whatsapp]),
+    [['Konan', 'Mme Konan', '+2250700000101'], ['Touré', 'M. Touré; père', '+2250700000102']]);
+  assert(importes.every((e) => e.id && e.cree_le && !e.supprime_le));
+  assert.strictEqual(S.importerEleves(admin.jeton, liste, false).ajoutes, 0, 'un second import ne duplique rien');
+  echoue(() => S.importerEleves(admin.jeton, '  ', false), /vide/);
+  echoue(() => S.importerEleves(admin.jeton, 'Nom;Prénom', false), /aucun élève/);
+  echoue(() => S.importerEleves('faux-jeton', liste, false), /SESSION_EXPIREE/);
+});
+
+test('« les autres sont présents » : ne touche pas les élèves déjà pointés', () => {
+  const s = S.creerSeance(admin.jeton, { matiere: 'Histoire', date_seance: '2026-11-18', heure_debut: '14:00', classe: '6e Z' });
+  const [konan, toure] = S.ouvrirPointage(admin.jeton, s.id).eleves;
+  S.creerEleve(admin.jeton, { nom: 'Zadi', prenom: 'Luc', classe: '6e Z', parent_nom: 'M. Zadi', parent_whatsapp: '+2250700000103' });
+  S.pointerEleve(admin.jeton, s.id, konan.id, 'absent', 'Malade');
+  const notifs = S.versObjets_(S.FEUILLES.NOTIFICATIONS).length;
+  const rep = S.pointerRestantsPresents(admin.jeton, s.id);
+  assert.strictEqual(rep.nb_pointes, 2);
+  assert.deepStrictEqual(rep.eleves.map((e) => e.statut), ['absent', 'present', 'present']);
+  assert.strictEqual(rep.eleves.find((e) => e.id === konan.id).motif, 'Malade');
+  assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, notifs, 'aucun message ne doit partir');
+  assert.strictEqual(S.pointerRestantsPresents(admin.jeton, s.id).nb_pointes, 0);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).filter((p) => p.seance_id === s.id).length, 3);
+  assert(toure.id && !verrou.tenu);
+  seance = s;
+});
+
+test('modification d\'une séance : les pointages sont conservés, la classe est figée', () => {
+  const maj = S.modifierSeance(admin.jeton, seance.id, { matiere: 'Histoire-Géographie', date_seance: '2026-11-19', heure_debut: '15:30', classe: '6e Z', enseignant_id: admin.id });
+  assert.deepStrictEqual([maj.matiere, maj.date_seance, maj.heure_debut, maj.enseignant_nom], ['Histoire-Géographie', '2026-11-19', '15:30', 'Awa Admin']);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.filter((e) => e.statut).length, 3);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '2026-11-19', heure_debut: '15:30', classe: '3e A' }), /classe ne peut plus/);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '19/11/2026', heure_debut: '15:30', classe: '6e Z' }), /invalide/);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '2026-11-19', heure_debut: '15:30', classe: '6e Z', enseignant_id: prof.id }), /Encadreur introuvable/);
+  echoue(() => S.modifierSeance(admin.jeton, 'inconnue', {}), /introuvable/);
+  // Sans pointage, la classe peut encore être corrigée.
+  const vide = S.creerSeance(admin.jeton, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Y' });
+  assert.strictEqual(S.modifierSeance(admin.jeton, vide.id, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Z' }).classe, '6e Z');
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.SEANCES, vide.id).enseignant_id, admin.id, 'sans encadreur fourni, celui de la séance est gardé');
+});
+
 console.log(`${nbTests} tests réussis.`);

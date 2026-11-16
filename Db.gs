@@ -254,6 +254,26 @@ function inserer_(def, objet) {
   });
 }
 
+/**
+ * Ajoute plusieurs lignes en une seule écriture. Dans Apps Script, chaque écriture dans le classeur
+ * coûte un aller-retour avec Google : écrire 200 lignes une par une prendrait des minutes.
+ */
+function insererPlusieurs_(def, objets) {
+  if (!objets.length) return [];
+  return avecVerrou_(() => {
+    const s = feuille_(def);
+    const maintenant = nowIso_();
+    const complets = objets.map((o) => Object.assign({ cree_le: maintenant }, o, { id: o.id || Utilities.getUuid() }));
+    const lignes = complets.map((c) => def.entetes.map((h) => (c[h] === undefined ? '' : c[h])));
+    const zone = s.getRange(s.getLastRow() + 1, 1, lignes.length, def.entetes.length);
+    const formats = formatsLigne_(def)[0];
+    zone.setNumberFormats(lignes.map(() => formats));
+    zone.setValues(lignes);
+    delete cacheFeuilles[def.nom];
+    return complets;
+  });
+}
+
 function mettreAJour_(def, id, patch) {
   return avecVerrou_(() => {
     const existant = trouverParId_(def, id);

@@ -412,22 +412,24 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       ${admin ? LIEN_CORBEILLE : ''}` };
   }
 
-  async function ouvrirFormSeance() {
+  // Sans argument : nouvelle séance. Avec une séance : correction de cette séance.
+  async function ouvrirFormSeance(seance) {
     const [classes, comptesActifs] = await Promise.all([api('listerClasses'), api('listerUtilisateurs')]);
-    const parDefaut = (comptesActifs.find((u) => u.role === 'enseignant') || comptesActifs.find((u) => u.id === utilisateur.id) || comptesActifs[0]).id;
-    ouvrirModale(`<form data-form="seance" class="p-5" novalidate>
-      <h2 class="text-lg font-semibold">Nouvelle séance</h2>
+    const parDefaut = seance ? seance.enseignant_id
+      : (comptesActifs.find((u) => u.role === 'enseignant') || comptesActifs.find((u) => u.id === utilisateur.id) || comptesActifs[0]).id;
+    ouvrirModale(`<form data-form="seance" data-id="${esc(seance ? seance.id : '')}" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">${seance ? 'Modifier la séance' : 'Nouvelle séance'}</h2>
       <div class="mt-4 space-y-3">
         <div><label class="etiquette" for="s-matiere">Matière</label>
-          <input class="champ" id="s-matiere" name="matiere" list="liste-matieres" required autocomplete="off">
+          <input class="champ" id="s-matiere" name="matiere" list="liste-matieres" required autocomplete="off" value="${esc(seance ? seance.matiere : '')}">
           <datalist id="liste-matieres"><option value="Mathématiques"><option value="Physique-Chimie"><option value="Informatique"><option value="Français"><option value="Anglais"><option value="SVT"></datalist></div>
         <div><label class="etiquette" for="s-classe">Classe ou groupe</label>
-          <input class="champ" id="s-classe" name="classe" list="liste-classes-s" required autocomplete="off">
+          <input class="champ" id="s-classe" name="classe" list="liste-classes-s" required autocomplete="off" value="${esc(seance ? seance.classe : '')}">
           <datalist id="liste-classes-s">${classes.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
-          <p class="aide">Les élèves de cette classe seront attendus à l'appel.</p></div>
+          <p class="aide">${seance ? "La classe ne peut plus être changée une fois l'appel commencé." : "Les élèves de cette classe seront attendus à l'appel."}</p></div>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="etiquette" for="s-date">Date</label><input class="champ" id="s-date" name="date_seance" type="date" required value="${dateLocale()}"></div>
-          <div><label class="etiquette" for="s-heure">Heure de début</label><input class="champ" id="s-heure" name="heure_debut" type="time" required value="${new Date().toTimeString().slice(0, 5)}"></div>
+          <div><label class="etiquette" for="s-date">Date</label><input class="champ" id="s-date" name="date_seance" type="date" required value="${esc(seance ? seance.date_seance : dateLocale())}"></div>
+          <div><label class="etiquette" for="s-heure">Heure de début</label><input class="champ" id="s-heure" name="heure_debut" type="time" required value="${esc(seance ? seance.heure_debut : new Date().toTimeString().slice(0, 5))}"></div>
         </div>
         <div><label class="etiquette" for="s-ens">Encadreur qui fera l'appel</label>
           <select class="champ" id="s-ens" name="enseignant_id">
@@ -438,7 +440,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
       <div class="mt-5 flex justify-end gap-2">
         <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
-        <button type="submit" class="btn btn-primaire">Créer la séance</button>
+        <button type="submit" class="btn btn-primaire">${seance ? 'Enregistrer les modifications' : 'Créer la séance'}</button>
       </div></form>`);
   }
 
@@ -480,6 +482,14 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <span class="puce bg-absent-pale text-absent">${pluriel(absents, 'absent', 'absents')}</span>
       <span class="puce bg-white text-ardoise">${restants} à pointer</span>`;
   }
+  // Bouton « les autres sont présents » : n'apparaît que s'il reste des élèves à pointer.
+  function htmlRestants(eleves) {
+    const restants = eleves.filter((e) => !e.statut).length;
+    if (!restants) return '';
+    return `<button type="button" data-action="pointer-restants" class="btn btn-secondaire w-full">
+        ${restants === eleves.length ? 'Marquer tous les élèves présents' : `Marquer ${pluriel(restants, 'autre élève présent', 'autres élèves présents')}`}</button>
+      <p class="aide">Pointez d'abord les absents, puis validez le reste d'un seul geste.</p>`;
+  }
 
   let pt = null;
   async function vuePointage(id) {
@@ -495,10 +505,12 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <p class="text-ardoise">Classe ${esc(s.classe)}, ${esc(fmtDateLongue(s.date_seance))} à ${esc(s.heure_debut)}.${estAdmin() ? ` Encadreur : ${esc(s.enseignant_nom)}.` : ''}</p>
       <div id="resume" class="sticky top-0 z-10 -mx-4 mb-3 mt-4 flex flex-wrap gap-2 bg-papier/95 px-4 py-2 backdrop-blur md:-mx-8 md:px-8">${htmlResume(donnees.eleves)}</div>
       ${corps}
+      <div id="zone-restants" class="mt-3">${htmlRestants(donnees.eleves)}</div>
       <h2 class="titre-section">${estAdmin() ? 'Exporter et gérer' : 'Exporter'}</h2>
       <div class="flex flex-wrap gap-2">
         <button type="button" data-action="exporter-pdf-seance" data-id="${esc(s.id)}" class="btn btn-primaire">Exporter en PDF</button>
         ${estAdmin() ? `<button type="button" data-action="exporter-csv" data-id="${esc(s.id)}" class="btn btn-secondaire">Exporter en CSV</button>
+        <button type="button" data-action="modifier-seance" class="btn btn-secondaire">Modifier la séance</button>
         <button type="button" data-action="supprimer-seance" data-id="${esc(s.id)}" class="btn btn-danger">Supprimer la séance</button>` : ''}
       </div>` };
   }
@@ -507,7 +519,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const li = $(`#ligne-${esc(e.id)}`);
     if (!li) return;
     li.outerHTML = htmlLigne(e);
-    if (pt) $('#resume').innerHTML = htmlResume(pt.eleves);
+    if (pt) { $('#resume').innerHTML = htmlResume(pt.eleves); $('#zone-restants').innerHTML = htmlRestants(pt.eleves); }
     if (focusStatut) $(`#ligne-${esc(e.id)} [data-statut="${focusStatut}"]`)?.focus();
   }
 
@@ -529,6 +541,23 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     } finally {
       pointagesEnCours.delete(eleveId);
     }
+  }
+
+  async function pointerRestants(bouton) {
+    if (!pt || pointagesEnCours.size) { toast('Un pointage est en cours : réessayez dans un instant.'); return; }
+    const restants = pt.eleves.filter((e) => !e.statut).length;
+    const ok = await confirmer({ titre: `Marquer ${pluriel(restants, 'élève présent', 'élèves présents')} ?`,
+      message: 'Les élèves déjà pointés ne sont pas modifiés. Vous pourrez encore corriger chaque élève ensuite.', bouton: 'Marquer présents' });
+    if (!ok) return;
+    bouton.disabled = true;
+    try {
+      const rep = await api('pointerRestantsPresents', pt.seance.id);
+      pt.eleves = rep.eleves;
+      $('#lignes').innerHTML = pt.eleves.map(htmlLigne).join('');
+      $('#resume').innerHTML = htmlResume(pt.eleves);
+      $('#zone-restants').innerHTML = htmlRestants(pt.eleves);
+      toast(`${pluriel(rep.nb_pointes, 'élève marqué présent', 'élèves marqués présents')}.`, 'succes');
+    } catch (err) { bouton.disabled = false; gererErreur(err); }
   }
 
   async function enregistrerMotif(eleveId, motif) {
@@ -580,7 +609,10 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     return { html: `
       <div class="flex items-center justify-between gap-3">
         <h1 class="titre-page">Élèves</h1>
-        <button type="button" data-action="nouvel-eleve" class="btn btn-primaire">Ajouter un élève</button>
+        <span class="flex flex-wrap justify-end gap-2">
+          <button type="button" data-action="importer-eleves" class="btn btn-secondaire">Importer une liste</button>
+          <button type="button" data-action="nouvel-eleve" class="btn btn-primaire">Ajouter un élève</button>
+        </span>
       </div>
       <div class="mt-4"><label class="sr-only" for="recherche">Rechercher un élève</label>
         <input id="recherche" data-input="recherche" type="search" class="champ" placeholder="Rechercher par nom ou prénom" value="${esc(filtreElevesTexte)}"></div>
@@ -607,6 +639,24 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <div class="mt-5 flex justify-end gap-2">
         <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
         <button type="submit" class="btn btn-primaire">${eleve ? 'Enregistrer les modifications' : "Ajouter l'élève"}</button>
+      </div></form>`);
+  }
+
+  function ouvrirFormImport(texte = '') {
+    ouvrirModale(`<form data-form="import" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">Importer une liste d'élèves</h2>
+      <p class="mt-2 text-sm text-ardoise">Une ligne par élève, avec cinq colonnes dans cet ordre : nom, prénom, classe, nom du parent, numéro WhatsApp du parent (avec l'indicatif, par exemple +225…).</p>
+      <div class="mt-4 space-y-3">
+        <div><label class="etiquette" for="imp-texte">Collez ici les lignes copiées depuis Excel ou Google Sheets</label>
+          <textarea class="champ font-mono text-sm" id="imp-texte" name="texte" rows="7" required style="padding-top:.5rem;padding-bottom:.5rem" placeholder="Bamba&#9;Issa&#9;3e A&#9;Mme Bamba&#9;+2250700000001">${esc(texte)}</textarea></div>
+        <div><label class="etiquette" for="imp-fichier">Ou choisissez un fichier CSV</label>
+          <input class="text-sm" id="imp-fichier" data-change="fichier-import" type="file" accept=".csv,.txt,text/csv,text/plain">
+          <p class="aide">Les élèves déjà enregistrés (même nom, prénom et classe) sont ignorés. Si une ligne est incorrecte, rien n'est importé.</p></div>
+      </div>
+      <div data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent" style="white-space:pre-line"></div>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        <button type="submit" class="btn btn-primaire">Vérifier la liste</button>
       </div></form>`);
   }
 
@@ -929,6 +979,9 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         toast('Compte supprimé.', 'succes'); router();
       } catch (e) { gererErreur(e); }
     },
+    'modifier-seance': () => { if (pt) ouvrirFormSeance(pt.seance).catch((e) => toast(e.message, 'erreur')); },
+    'importer-eleves': () => ouvrirFormImport(),
+    'pointer-restants': (el) => pointerRestants(el),
     pointer: (el) => pointer(el.dataset.eleve, el.dataset.statut),
     renvoyer: (el) => renvoyer(el.dataset.notif),
   };
@@ -940,6 +993,13 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const el = e.target;
     if (el.dataset.motif) enregistrerMotif(el.dataset.motif, el.value);
     if (el.dataset.change === 'periode') { periodeJours = el.value; router(); }
+    if (el.dataset.change === 'fichier-import' && el.files[0]) {
+      if (el.files[0].size > 200000) { toast('Fichier trop volumineux : importez la liste en plusieurs fois.', 'erreur'); el.value = ''; return; }
+      const lecteur = new FileReader();
+      lecteur.onload = () => { const zone = $('#imp-texte'); if (zone) zone.value = String(lecteur.result); };
+      lecteur.onerror = () => toast('Lecture du fichier impossible.', 'erreur');
+      lecteur.readAsText(el.files[0]); // UTF-8 : un fichier enregistré dans un autre encodage aura des accents abîmés, visibles dans la zone de texte
+    }
   });
   document.addEventListener('input', (e) => {
     if (e.target.dataset.input !== 'recherche') return;
@@ -955,9 +1015,30 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       else await api('creerEleve', donnees);
       modale.close(); toast(id ? 'Modifications enregistrées.' : 'Élève ajouté.', 'succes'); router();
     },
-    async seance(donnees) {
+    async seance(donnees, form) {
+      const id = form.dataset.id;
+      if (id) { await api('modifierSeance', id, donnees); modale.close(); toast('Séance modifiée.', 'succes'); router(); return; }
       const s = await api('creerSeance', donnees);
       modale.close(); location.hash = `#/seances/${esc(s.id)}`;
+    },
+    // Deux temps : une vérification sans rien écrire, puis l'import après confirmation du bilan.
+    async import(donnees) {
+      const texte = donnees.texte;
+      const bilan = await api('importerEleves', texte, true);
+      if (!bilan.ok) {
+        const lignes = bilan.erreurs.map((x) => `Ligne ${x.ligne} : ${x.message}`);
+        if (bilan.nb_erreurs > bilan.erreurs.length) lignes.push(`… et ${bilan.nb_erreurs - bilan.erreurs.length} autres lignes incorrectes.`);
+        throw new Error(`Rien n'a été importé. Corrigez ces lignes puis recommencez.\n${lignes.join('\n')}`);
+      }
+      if (!bilan.ajoutes) throw new Error('Tous les élèves de cette liste sont déjà enregistrés.');
+      const detail = bilan.classes.map((c) => `${c.classe} : ${c.nb}`).join(', ');
+      const ok = await confirmer({ titre: `Importer ${pluriel(bilan.ajoutes, 'élève', 'élèves')} ?`,
+        message: `Par classe : ${detail}.${bilan.ignores ? ` ${pluriel(bilan.ignores, 'élève déjà enregistré sera ignoré', 'élèves déjà enregistrés seront ignorés')}.` : ''}`, bouton: 'Importer' });
+      if (!ok) { ouvrirFormImport(texte); return; }
+      try {
+        const rep = await api('importerEleves', texte, false);
+        toast(`${pluriel(rep.ajoutes, 'élève importé', 'élèves importés')}.`, 'succes'); router();
+      } catch (err) { if (!gererErreur(err)) ouvrirFormImport(texte); }
     },
     async utilisateur(donnees, form) {
       const id = form.dataset.id;

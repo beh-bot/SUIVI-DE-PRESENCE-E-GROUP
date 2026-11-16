@@ -12,6 +12,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 - **Comptes** : créés par l'administrateur, ou par lien d'invitation à usage unique valable 7 jours.
 - **Corbeille** : un élève ou une séance supprimés gardent leur historique et peuvent être rétablis.
 - **Sauvegarde** : copie des données dans un autre classeur, à la demande ou chaque nuit sur sept jours.
+- **Import** : une liste d'élèves se colle depuis un tableur ou se charge en CSV.
 
 ## Fichiers
 
