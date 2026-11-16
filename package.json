@@ -1,0 +1,9 @@
+{
+  "name": "suivi-de-presence-excellence-group",
+  "private": true,
+  "description": "Suivi de présence Excellence Group (Google Apps Script). Ce fichier ne sert qu'aux tests et à l'aperçu local : il n'est pas envoyé à Apps Script.",
+  "scripts": {
+    "test": "node tests/simulation.cjs",
+    "apercu": "node tests/apercu-local.cjs"
+  }
+}

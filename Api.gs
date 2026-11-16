@@ -58,12 +58,13 @@ function motDePasseValideFormat_(v) {
 // ── Comptes (encadreurs et administrateurs) ─────────────────────────
 
 /** Utilisée par le menu Google Sheets (premier administrateur) ET par creerUtilisateur() ci-dessous. */
-function creerCompteInterne_(nom, email, motDePasse, role) {
-  return avecVerrou_(() => creerCompteBrut_(nom, email, motDePasse, role));
+function creerCompteInterne_(nom, email, motDePasse, role, mdpAChanger) {
+  return avecVerrou_(() => creerCompteBrut_(nom, email, motDePasse, role, mdpAChanger));
 }
 
 /** Création du compte SANS verrou : à appeler uniquement depuis une section déjà protégée par avecVerrou_(). */
-function creerCompteBrut_(nom, email, motDePasse, role) {
+/** mdpAChanger : vrai quand le mot de passe a été choisi par quelqu'un d'autre que le titulaire du compte. */
+function creerCompteBrut_(nom, email, motDePasse, role, mdpAChanger) {
   const n = texteRequis_(nom, 'Le nom', 80);
   const e = identifiantValide_(email);
   const m = motDePasseValideFormat_(motDePasse);
@@ -72,7 +73,7 @@ function creerCompteBrut_(nom, email, motDePasse, role) {
   }
   const paire = hacherMotDePasse_(m);
   return inserer_(FEUILLES.UTILISATEURS, {
-    nom: n, email: e, mdp_hash: paire.hash, mdp_sel: paire.sel, role: role, actif: true,
+    nom: n, email: e, mdp_hash: paire.hash, mdp_sel: paire.sel, role: role, actif: true, mdp_a_changer: mdpAChanger ? 'oui' : '',
   });
 }
 
@@ -110,6 +111,7 @@ function creerInvitation(jeton, champs) {
   const inv = inserer_(FEUILLES.INVITATIONS, {
     role: role, nom_suggere: nom, expire_le: new Date(Date.now() + DUREE_INVITATION_MS).toISOString(), utilise_le: '', cree_par: u.id,
   });
+  journaliser_(u, 'invitation.creer', nom || '(sans nom)', role);
   return resumeInvitation_(inv);
 }
 
@@ -122,8 +124,10 @@ function listerInvitations(jeton) {
 }
 
 function revoquerInvitation(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  const inv = trouverParId_(FEUILLES.INVITATIONS, id);
   if (!supprimerLigne_(FEUILLES.INVITATIONS, id)) throw new Error('Invitation introuvable.');
+  journaliser_(u, 'invitation.annuler', (inv && inv.nom_suggere) || '(sans nom)', inv ? inv.role : '');
   return { ok: true };
 }
 
@@ -146,13 +150,14 @@ function accepterInvitation(id, champs) {
     mettreAJour_(FEUILLES.INVITATIONS, inv.id, { utilise_le: nowIso_() });
     return compte;
   });
+  journaliser_(u, 'invitation.accepter', u.email, u.role);
   const jeton = creerSession_(u);
   return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
 function listerUtilisateurs(jeton) {
   exigerAdmin_(jeton);
-  const seances = versObjets_(FEUILLES.SEANCES);
+  const seances = actifs_(FEUILLES.SEANCES);
   return versObjets_(FEUILLES.UTILISATEURS)
     .filter((u) => u.actif)
     .map((u) => ({
@@ -163,9 +168,11 @@ function listerUtilisateurs(jeton) {
 }
 
 function creerUtilisateur(jeton, champs) {
-  exigerAdmin_(jeton);
+  const admin = exigerAdmin_(jeton);
+  champs = champs || {};
   const role = champs.role === 'admin' ? 'admin' : 'enseignant';
-  const u = creerCompteInterne_(champs.nom, champs.email, champs.mot_de_passe, role);
+  const u = creerCompteInterne_(champs.nom, champs.email, champs.mot_de_passe, role, true);
+  journaliser_(admin, 'compte.creer', u.email, u.role);
   return { id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
@@ -184,6 +191,7 @@ function modifierUtilisateur(jeton, id, champs) {
     const paire = hacherMotDePasse_(champs.mot_de_passe);
     patch.mdp_hash = paire.hash;
     patch.mdp_sel = paire.sel;
+    patch.mdp_a_changer = id !== moiCourant.id ? 'oui' : ''; // remplacé pour quelqu'un d'autre : il devra le changer
   }
   // Vérification du doublon et écriture dans la même section verrouillée (sinon deux modifications
   // simultanées pourraient donner le même identifiant à deux comptes).
@@ -196,6 +204,7 @@ function modifierUtilisateur(jeton, id, champs) {
     return mettreAJour_(FEUILLES.UTILISATEURS, id, patch);
   });
   if (champs.mot_de_passe && id !== moiCourant.id) invaliderSessionsUtilisateur_(id);
+  journaliser_(moiCourant, 'compte.modifier', maj.email, maj.role + (champs.mot_de_passe ? ', mot de passe remplacé' : ''));
   return { id: maj.id, nom: maj.nom, email: maj.email, role: maj.role };
 }
 
@@ -207,85 +216,314 @@ function modifierUtilisateur(jeton, id, champs) {
 function supprimerUtilisateur(jeton, id, reassignerA) {
   const moiCourant = exigerAdmin_(jeton);
   if (id === moiCourant.id) throw new Error('Vous ne pouvez pas supprimer votre propre compte.');
+  let identifiantSupprime = '';
   const resultat = avecVerrou_(() => {
     const u = trouverParId_(FEUILLES.UTILISATEURS, id);
     if (!u || !u.actif) throw new Error('Compte introuvable.');
+    identifiantSupprime = u.email;
 
-    const seances = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
+    const toutes = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
+    const seances = toutes.filter((s) => !s.supprime_le); // celles de la corbeille n'obligent pas à choisir un repreneur
     if (seances.length && !reassignerA) {
       return { ok: false, code: 'SEANCES_ATTRIBUEES', nb_seances: seances.length };
     }
-    if (seances.length) {
+    if (reassignerA && toutes.length) {
       const repreneur = trouverParId_(FEUILLES.UTILISATEURS, reassignerA);
       if (!repreneur || !repreneur.actif || reassignerA === id) throw new Error('Le repreneur choisi est invalide.');
-      seances.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
+      toutes.forEach((s) => mettreAJour_(FEUILLES.SEANCES, s.id, { enseignant_id: reassignerA }));
     }
     mettreAJour_(FEUILLES.UTILISATEURS, id, { actif: false, email: `supprime-${id}-${u.email}` });
     return { ok: true, seances_reattribuees: seances.length };
   });
-  if (resultat.ok) invaliderSessionsUtilisateur_(id);
+  if (resultat.ok) {
+    invaliderSessionsUtilisateur_(id);
+    journaliser_(moiCourant, 'compte.supprimer', identifiantSupprime, resultat.seances_reattribuees ? resultat.seances_reattribuees + ' séance(s) transférée(s)' : '');
+  }
   return resultat;
+}
+
+// ── Journal des actions ───────────────────────────────────────────────
+
+/** Les 200 dernières actions, de la plus récente à la plus ancienne. Le journal complet reste dans la feuille « Journal ». */
+function listerJournal(jeton) {
+  exigerAdmin_(jeton);
+  return versObjets_(FEUILLES.JOURNAL)
+    .sort((a, b) => String(b.horodatage).localeCompare(String(a.horodatage)))
+    .slice(0, 200)
+    .map((l) => ({ horodatage: l.horodatage, utilisateur_nom: l.utilisateur_nom, action: l.action, cible: l.cible, detail: l.detail }));
 }
 
 // ── Élèves ────────────────────────────────────────────────────────────
 
 function listerEleves(jeton) {
   exigerAdmin_(jeton);
-  return versObjets_(FEUILLES.ELEVES)
+  return actifs_(FEUILLES.ELEVES)
     .map(sansLigne_)
     .sort((a, b) => a.classe.localeCompare(b.classe) || a.nom.localeCompare(b.nom));
 }
 
+/** Clé de comparaison d'une classe : sans majuscules, accents, espaces ni ponctuation. « 3e A », « 3eA » et « 3E a » donnent la même clé. */
+function cleClasse_(classe) {
+  return String(classe).toLowerCase().normalize('NFD').replace(/[^a-z0-9]/g, '');
+}
+
+/** Pour chaque clé, l'écriture déjà utilisée dans le classeur (élèves et séances, corbeille comprise). */
+function indexClasses_() {
+  const index = {};
+  versObjets_(FEUILLES.ELEVES).concat(versObjets_(FEUILLES.SEANCES)).forEach((o) => {
+    const cle = cleClasse_(o.classe);
+    if (cle && !index[cle]) index[cle] = o.classe;
+  });
+  return index;
+}
+
+/**
+ * Ramène une classe saisie à l'écriture déjà en usage si elle n'en diffère que par la casse, les
+ * espaces ou les accents. Un élève saisi en « 3eA » rejoint ainsi la classe « 3e A » existante au
+ * lieu d'en créer une seconde, que l'appel ne retrouverait pas.
+ */
+function classeCanonique_(classe, index) {
+  return (index || indexClasses_())[cleClasse_(classe)] || classe;
+}
+
+/**
+ * Renomme une classe partout (élèves et séances). Si le nouveau nom désigne une classe qui existe
+ * déjà, les deux sont fusionnées : c'est le moyen de réparer deux écritures d'une même classe.
+ */
+function renommerClasse(jeton, ancienne, nouvelle) {
+  const u = exigerAdmin_(jeton);
+  const cible = texteRequis_(nouvelle, 'Le nouveau nom', 40);
+  const resultat = avecVerrou_(() => {
+    const existantes = {};
+    versObjets_(FEUILLES.ELEVES).concat(versObjets_(FEUILLES.SEANCES)).forEach((o) => (existantes[o.classe] = true));
+    if (typeof ancienne !== 'string' || !existantes[ancienne]) throw new Error('Classe introuvable.');
+    // Une autre classe porte déjà ce nom, à la casse ou aux espaces près : on reprend son écriture exacte.
+    const jumelle = Object.keys(existantes).find((c) => c !== ancienne && cleClasse_(c) === cleClasse_(cible));
+    const finale = jumelle || cible;
+    if (finale === ancienne) throw new Error('Le nouveau nom est identique à l\'ancien.');
+    return {
+      classe: finale, fusion: !!jumelle,
+      eleves: remplacerDansColonne_(FEUILLES.ELEVES, 'classe', ancienne, finale),
+      seances: remplacerDansColonne_(FEUILLES.SEANCES, 'classe', ancienne, finale),
+    };
+  });
+  journaliser_(u, resultat.fusion ? 'classe.fusionner' : 'classe.renommer', ancienne + ' → ' + resultat.classe,
+    resultat.eleves + ' élève(s), ' + resultat.seances + ' séance(s)');
+  return resultat;
+}
+
 function listerClasses(jeton) {
   exigerConnexion_(jeton);
-  const c1 = versObjets_(FEUILLES.ELEVES).map((e) => e.classe);
-  const c2 = versObjets_(FEUILLES.SEANCES).map((s) => s.classe);
+  const c1 = actifs_(FEUILLES.ELEVES).map((e) => e.classe);
+  const c2 = actifs_(FEUILLES.SEANCES).map((s) => s.classe);
   const toutes = {};
   c1.concat(c2).forEach((c) => (toutes[c] = true));
   return Object.keys(toutes).sort();
 }
 
-function validerEleve_(champs) {
+function validerEleve_(champs, indexClasses) {
+  champs = champs || {};
   return {
     nom: texteRequis_(champs.nom, 'Le nom', 80),
     prenom: texteRequis_(champs.prenom, 'Le prénom', 80),
-    classe: texteRequis_(champs.classe, 'La classe', 40),
+    classe: classeCanonique_(texteRequis_(champs.classe, 'La classe', 40), indexClasses),
     parent_nom: texteRequis_(champs.parent_nom, 'Le nom du parent ou tuteur', 80),
     parent_whatsapp: telephoneE164_(champs.parent_whatsapp),
   };
 }
 
+function libelleEleve_(e) {
+  return e.nom + ' ' + e.prenom + ' (' + e.classe + ')';
+}
+
 function creerEleve(jeton, champs) {
-  exigerAdmin_(jeton);
-  return sansLigne_(inserer_(FEUILLES.ELEVES, validerEleve_(champs)));
+  const u = exigerAdmin_(jeton);
+  const e = inserer_(FEUILLES.ELEVES, validerEleve_(champs));
+  journaliser_(u, 'eleve.creer', libelleEleve_(e));
+  return sansLigne_(e);
+}
+
+// ── Import d'une liste d'élèves ───────────────────────────────────────
+
+const IMPORT_MAX_LIGNES = 500;
+const IMPORT_COLONNES = ['nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp'];
+
+/**
+ * Découpe un texte tabulaire en lignes de cellules. Le séparateur est deviné sur la première
+ * ligne : tabulation (copier-coller depuis un tableur), point-virgule (CSV français) ou virgule.
+ * Les guillemets sont gérés : "Koné; Adama" est une seule cellule, "" représente un guillemet.
+ */
+function analyserCsv_(texte) {
+  const t = String(texte || '').replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  const premiere = t.split('\n')[0];
+  const sep = premiere.indexOf('\t') >= 0 ? '\t' : premiere.indexOf(';') >= 0 ? ';' : ',';
+  const lignes = [];
+  let ligne = [];
+  let cellule = '';
+  let entreGuillemets = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (entreGuillemets) {
+      if (c === '"' && t[i + 1] === '"') { cellule += '"'; i++; }
+      else if (c === '"') entreGuillemets = false;
+      else cellule += c;
+    } else if (c === '"' && cellule === '') entreGuillemets = true;
+    else if (c === sep) { ligne.push(cellule); cellule = ''; }
+    else if (c === '\n') { ligne.push(cellule); lignes.push(ligne); ligne = []; cellule = ''; }
+    else cellule += c;
+  }
+  ligne.push(cellule);
+  lignes.push(ligne);
+  return lignes.map((l) => l.map((x) => x.trim())).filter((l) => l.some((x) => x !== ''));
+}
+
+function cleEleve_(e) {
+  return [e.nom, e.prenom, e.classe].join('|').toLowerCase();
+}
+
+/**
+ * Importe des élèves depuis un texte : une ligne par élève, colonnes dans l'ordre
+ * nom, prénom, classe, nom du parent, numéro WhatsApp. Une première ligne de titres est ignorée.
+ * Tout ou rien : si une seule ligne est invalide, rien n'est enregistré et la liste des erreurs
+ * est renvoyée. Un élève déjà présent (même nom, prénom et classe) est ignoré, pas dupliqué.
+ * Avec simulation = true, rien n'est écrit : on obtient seulement le bilan.
+ */
+function importerEleves(jeton, texte, simulation) {
+  const u = exigerAdmin_(jeton);
+  if (typeof texte !== 'string' || !texte.trim()) throw new Error('La liste est vide.');
+  if (texte.length > 200000) throw new Error('La liste est trop longue. Importez-la en plusieurs fois.');
+  let lignes = analyserCsv_(texte).map((cellules, i) => ({ numero: i + 1, cellules: cellules }));
+  const sansAccent = (x) => String(x).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (lignes.length && sansAccent(lignes[0].cellules[0]) === 'nom') lignes = lignes.slice(1); // ligne de titres
+  if (!lignes.length) throw new Error('La liste ne contient aucun élève.');
+  if (lignes.length > IMPORT_MAX_LIGNES) throw new Error(`Pas plus de ${IMPORT_MAX_LIGNES} élèves à la fois. Importez la liste en plusieurs fois.`);
+
+  const erreurs = [];
+  const valides = [];
+  const indexClasses = indexClasses_(); // lu une fois pour toute la liste
+  lignes.forEach((l) => {
+    try {
+      if (l.cellules.length < IMPORT_COLONNES.length) {
+        throw new Error(`${l.cellules.length} colonne(s) au lieu de 5 (nom, prénom, classe, parent, numéro WhatsApp).`);
+      }
+      const champs = {};
+      IMPORT_COLONNES.forEach((c, i) => (champs[c] = l.cellules[i]));
+      const eleve = validerEleve_(champs, indexClasses);
+      // Une classe nouvelle écrite de deux façons dans la même liste : la première écriture l'emporte.
+      if (!indexClasses[cleClasse_(eleve.classe)]) indexClasses[cleClasse_(eleve.classe)] = eleve.classe;
+      valides.push(eleve);
+    } catch (e) {
+      erreurs.push({ ligne: l.numero, message: e.message });
+    }
+  });
+  if (erreurs.length) return { ok: false, erreurs: erreurs.slice(0, 50), nb_erreurs: erreurs.length };
+
+  const bilan = avecVerrou_(() => {
+    const connus = {};
+    actifs_(FEUILLES.ELEVES).forEach((e) => (connus[cleEleve_(e)] = true));
+    const nouveaux = valides.filter((e) => {
+      if (connus[cleEleve_(e)]) return false;
+      connus[cleEleve_(e)] = true; // évite aussi les doublons à l'intérieur de la liste
+      return true;
+    });
+    if (!simulation) insererPlusieurs_(FEUILLES.ELEVES, nouveaux);
+    const classes = {};
+    nouveaux.forEach((e) => (classes[e.classe] = (classes[e.classe] || 0) + 1));
+    return {
+      ok: true, simulation: !!simulation, ajoutes: nouveaux.length, ignores: valides.length - nouveaux.length,
+      classes: Object.keys(classes).sort().map((c) => ({ classe: c, nb: classes[c] })),
+    };
+  });
+  if (!simulation && bilan.ajoutes) {
+    journaliser_(u, 'eleve.importer', bilan.ajoutes + ' élève(s)', bilan.classes.map((c) => c.classe + ' : ' + c.nb).join(', '));
+  }
+  return bilan;
 }
 
 function modifierEleve(jeton, id, champs) {
-  exigerAdmin_(jeton);
-  const maj = mettreAJour_(FEUILLES.ELEVES, id, validerEleve_(champs));
+  const u = exigerAdmin_(jeton);
+  const donnees = validerEleve_(champs);
+  const maj = avecVerrou_(() => (trouverActifParId_(FEUILLES.ELEVES, id) ? mettreAJour_(FEUILLES.ELEVES, id, donnees) : null));
   if (!maj) throw new Error('Élève introuvable.');
+  journaliser_(u, 'eleve.modifier', libelleEleve_(maj));
   return sansLigne_(maj);
 }
 
+/**
+ * « Supprimer » un élève le place dans la corbeille : il disparaît des listes et de l'appel, mais
+ * ses pointages restent, et les anciennes feuilles de présence ne changent pas. L'effacement réel
+ * se fait depuis la corbeille (supprimerEleveDefinitivement).
+ */
 function supprimerEleve(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'eleve.corbeille', libelleEleve_(mettreALaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable.')));
+  return { ok: true };
+}
+
+function restaurerEleve(jeton, id) {
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'eleve.retablir', libelleEleve_(sortirDeLaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable dans la corbeille.')));
+  return { ok: true };
+}
+
+/** Efface pour de bon un élève de la corbeille, avec ses pointages et ses messages. Irréversible. */
+function supprimerEleveDefinitivement(jeton, id) {
+  const u = exigerAdmin_(jeton);
+  let libelle = '';
   avecVerrou_(() => {
-    if (!supprimerLigne_(FEUILLES.ELEVES, id)) throw new Error('Élève introuvable.');
+    const e = trouverParId_(FEUILLES.ELEVES, id);
+    if (!e || !e.supprime_le) throw new Error("Élève introuvable dans la corbeille. Placez-le d'abord dans la corbeille.");
+    libelle = libelleEleve_(e);
+    supprimerLigne_(FEUILLES.ELEVES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.eleve_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.eleve_id === id);
   });
+  journaliser_(u, 'eleve.effacer', libelle, 'avec ses pointages');
   return { ok: true };
+}
+
+// ── Corbeille (élèves et séances) ───────────────────────────────────
+
+function mettreALaCorbeille_(def, id, messageIntrouvable) {
+  return avecVerrou_(() => {
+    if (!trouverActifParId_(def, id)) throw new Error(messageIntrouvable);
+    return mettreAJour_(def, id, { supprime_le: nowIso_() });
+  });
+}
+
+function sortirDeLaCorbeille_(def, id, messageIntrouvable) {
+  return avecVerrou_(() => {
+    const o = trouverParId_(def, id);
+    if (!o || !o.supprime_le) throw new Error(messageIntrouvable);
+    return mettreAJour_(def, id, { supprime_le: '' });
+  });
+}
+
+function listerCorbeille(jeton) {
+  exigerAdmin_(jeton);
+  const recentD_abord = (a, b) => String(b.supprime_le).localeCompare(String(a.supprime_le));
+  const presences = versObjets_(FEUILLES.PRESENCES);
+  return {
+    eleves: versObjets_(FEUILLES.ELEVES).filter((e) => e.supprime_le).sort(recentD_abord).map((e) => ({
+      id: e.id, nom: e.nom, prenom: e.prenom, classe: e.classe, supprime_le: e.supprime_le,
+      nb_pointages: presences.filter((p) => p.eleve_id === e.id).length,
+    })),
+    seances: versObjets_(FEUILLES.SEANCES).filter((s) => s.supprime_le).sort(recentD_abord).map((s) => ({
+      id: s.id, matiere: s.matiere, classe: s.classe, date_seance: s.date_seance, heure_debut: s.heure_debut, supprime_le: s.supprime_le,
+      nb_pointages: presences.filter((p) => p.seance_id === s.id).length,
+    })),
+  };
 }
 
 function historiqueEleve(jeton, id) {
   exigerAdmin_(jeton);
-  const eleve = trouverParId_(FEUILLES.ELEVES, id);
+  const eleve = trouverParId_(FEUILLES.ELEVES, id); // un élève de la corbeille reste consultable
   if (!eleve) throw new Error('Élève introuvable.');
-  const seances = versObjets_(FEUILLES.SEANCES);
+  const seances = actifs_(FEUILLES.SEANCES);
   const pointages = versObjets_(FEUILLES.PRESENCES)
-    .filter((p) => p.eleve_id === id)
+    .filter((p) => p.eleve_id === id && seances.some((x) => x.id === p.seance_id)) // sans les séances de la corbeille
     .map((p) => {
-      const s = seances.find((x) => x.id === p.seance_id) || {};
+      const s = seances.find((x) => x.id === p.seance_id);
       return {
         seance_id: p.seance_id, matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut,
         statut: p.statut, motif: p.motif, horodatage: p.horodatage,
@@ -303,7 +541,7 @@ function historiqueEleve(jeton, id) {
 // ── Séances ───────────────────────────────────────────────────────────
 
 function chargerSeanceAvecEnseignant_(id) {
-  const s = trouverParId_(FEUILLES.SEANCES, id);
+  const s = trouverActifParId_(FEUILLES.SEANCES, id); // une séance de la corbeille est inaccessible tant qu'elle n'est pas rétablie
   if (!s) throw new Error('Séance introuvable.');
   const ens = trouverParId_(FEUILLES.UTILISATEURS, s.enseignant_id);
   return Object.assign(sansLigne_(s), { enseignant_nom: ens ? ens.nom : '(compte supprimé)' });
@@ -320,7 +558,8 @@ function listerSeances(jeton, filtres) {
   const utilisateurs = versObjets_(FEUILLES.UTILISATEURS);
   const presences = versObjets_(FEUILLES.PRESENCES);
   const eleves = versObjets_(FEUILLES.ELEVES);
-  return versObjets_(FEUILLES.SEANCES)
+  const nonSignalees = absencesNonSignalees_();
+  return actifs_(FEUILLES.SEANCES)
     .filter((s) => u.role === 'admin' || s.enseignant_id === u.id)
     .filter((s) => !filtres.date || s.date_seance === filtres.date)
     .filter((s) => !filtres.classe || s.classe === filtres.classe)
@@ -329,45 +568,113 @@ function listerSeances(jeton, filtres) {
       const pts = presences.filter((p) => p.seance_id === s.id);
       return Object.assign(sansLigne_(s), {
         enseignant_nom: ens ? ens.nom : '(compte supprimé)',
-        attendus: eleves.filter((e) => e.classe === s.classe).length,
+        attendus: eleves.filter((e) => e.classe === s.classe && attenduALaSeance_(e, pts)).length,
+        a_prevenir: nonSignalees[s.id] || 0, // absents dont le parent n'a pas encore été prévenu
         presents: pts.filter((p) => p.statut === 'present').length,
         absents: pts.filter((p) => p.statut === 'absent').length,
       });
     })
     .sort((a, b) => (b.date_seance + b.heure_debut).localeCompare(a.date_seance + a.heure_debut))
-    .slice(0, 200);
+    .slice(0, limiteListe_(filtres.limite));
+}
+
+/**
+ * Nombre de lignes renvoyées par une liste : 200 par défaut, plus si l'écran le demande (bouton
+ * « Afficher les plus anciennes »), sans dépasser 2000 pour ne pas saturer le navigateur.
+ */
+function limiteListe_(demande) {
+  const n = Math.floor(Number(demande)) || PAS_LISTE;
+  return Math.min(Math.max(n, PAS_LISTE), 2000);
+}
+const PAS_LISTE = 200;
+
+function validerSeance_(champs, enseignantParDefaut) {
+  champs = champs || {};
+  const enseignantId = champs.enseignant_id || enseignantParDefaut;
+  const ens = trouverParId_(FEUILLES.UTILISATEURS, enseignantId);
+  if (!ens || !ens.actif) throw new Error('Encadreur introuvable.');
+  return {
+    matiere: texteRequis_(champs.matiere, 'La matière', 60),
+    date_seance: dateIsoValide_(champs.date_seance),
+    heure_debut: heureValide_(champs.heure_debut),
+    classe: classeCanonique_(texteRequis_(champs.classe, 'La classe', 40)),
+    enseignant_id: enseignantId,
+  };
+}
+
+function libelleSeance_(s) {
+  return s.matiere + ', ' + s.classe + ', ' + s.date_seance + ' ' + s.heure_debut;
 }
 
 function creerSeance(jeton, champs) {
   const u = exigerAdmin_(jeton);
-  const enseignantId = champs.enseignant_id || u.id;
-  const ens = trouverParId_(FEUILLES.UTILISATEURS, enseignantId);
-  if (!ens || !ens.actif) throw new Error('Encadreur introuvable.');
-  const s = inserer_(FEUILLES.SEANCES, {
-    matiere: texteRequis_(champs.matiere, 'La matière', 60),
-    date_seance: dateIsoValide_(champs.date_seance),
-    heure_debut: heureValide_(champs.heure_debut),
-    classe: texteRequis_(champs.classe, 'La classe', 40),
-    enseignant_id: enseignantId,
-  });
+  const s = inserer_(FEUILLES.SEANCES, validerSeance_(champs, u.id));
+  journaliser_(u, 'seance.creer', libelleSeance_(s));
   return chargerSeanceAvecEnseignant_(s.id);
 }
 
+/**
+ * Corrige une séance (matière, date, heure, encadreur, classe) sans perdre ses pointages.
+ * La classe ne peut plus changer dès qu'un élève a été pointé : les pointages existants
+ * concerneraient des élèves qui ne sont pas dans la nouvelle classe.
+ */
+function modifierSeance(jeton, id, champs) {
+  const u = exigerAdmin_(jeton);
+  const maj = avecVerrou_(() => {
+    const actuelle = trouverActifParId_(FEUILLES.SEANCES, id);
+    if (!actuelle) throw new Error('Séance introuvable.');
+    const donnees = validerSeance_(champs, actuelle.enseignant_id);
+    if (donnees.classe !== actuelle.classe && versObjets_(FEUILLES.PRESENCES).some((p) => p.seance_id === id)) {
+      throw new Error("L'appel de cette séance a commencé : sa classe ne peut plus être changée. Créez une autre séance pour l'autre classe.");
+    }
+    return mettreAJour_(FEUILLES.SEANCES, id, donnees);
+  });
+  journaliser_(u, 'seance.modifier', libelleSeance_(maj));
+  return chargerSeanceAvecEnseignant_(id);
+}
+
+/** « Supprimer » une séance la place dans la corbeille : ses pointages sont conservés mais ne comptent plus. */
 function supprimerSeance(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'seance.corbeille', libelleSeance_(mettreALaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable.')));
+  return { ok: true };
+}
+
+function restaurerSeance(jeton, id) {
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'seance.retablir', libelleSeance_(sortirDeLaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable dans la corbeille.')));
+  return { ok: true };
+}
+
+/** Efface pour de bon une séance de la corbeille, avec ses pointages et ses messages. Irréversible. */
+function supprimerSeanceDefinitivement(jeton, id) {
+  const u = exigerAdmin_(jeton);
+  let libelle = '';
   avecVerrou_(() => {
-    if (!supprimerLigne_(FEUILLES.SEANCES, id)) throw new Error('Séance introuvable.');
+    const s = trouverParId_(FEUILLES.SEANCES, id);
+    if (!s || !s.supprime_le) throw new Error("Séance introuvable dans la corbeille. Placez-la d'abord dans la corbeille.");
+    libelle = libelleSeance_(s);
+    supprimerLigne_(FEUILLES.SEANCES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.seance_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.seance_id === id);
   });
+  journaliser_(u, 'seance.effacer', libelle, 'avec ses pointages');
   return { ok: true };
 }
 
 // ── Pointage ──────────────────────────────────────────────────────────
 
+/**
+ * Un élève figure sur la feuille d'une séance s'il est actif, ou s'il est dans la corbeille mais
+ * a été pointé à cette séance : retirer un élève ne modifie pas les feuilles de présence passées.
+ */
+function attenduALaSeance_(eleve, presencesDeLaSeance) {
+  return !eleve.supprime_le || presencesDeLaSeance.some((p) => p.eleve_id === eleve.id);
+}
+
 function lignesPointage_(seance) {
-  const eleves = versObjets_(FEUILLES.ELEVES).filter((e) => e.classe === seance.classe);
   const presences = versObjets_(FEUILLES.PRESENCES).filter((p) => p.seance_id === seance.id);
+  const eleves = versObjets_(FEUILLES.ELEVES).filter((e) => e.classe === seance.classe && attenduALaSeance_(e, presences));
   const notifs = versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === seance.id);
   return eleves
     .map((e) => {
@@ -400,7 +707,7 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
   const seance = chargerSeanceAvecEnseignant_(seanceId);
   verifierAccesSeance_(seance, u);
   if (statut !== 'present' && statut !== 'absent') throw new Error('Le statut doit être « present » ou « absent ».');
-  const eleve = trouverParId_(FEUILLES.ELEVES, eleveId);
+  const eleve = trouverActifParId_(FEUILLES.ELEVES, eleveId);
   if (!eleve) throw new Error('Élève introuvable.');
   if (eleve.classe !== seance.classe) throw new Error("Cet élève n'appartient pas à la classe de la séance.");
   const motifNettoye = statut === 'absent' && motif ? texteRequis_(motif, 'Le motif', 200) : '';
@@ -414,8 +721,96 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
     else inserer_(FEUILLES.PRESENCES, donnees);
   });
 
-  if (statut === 'absent') declencherNotificationAbsence_(seance, eleve);
+  // Aucun message ne part ici : les parents sont prévenus quand l'encadreur termine l'appel (cloturerAppel).
   return lignesPointage_(seance).find((l) => l.id === eleveId);
+}
+
+/**
+ * Par séance, le nombre d'absents dont le parent n'a encore aucun message (ni envoyé, ni en cours,
+ * ni en échec). C'est ce qui reste à faire partir en terminant l'appel.
+ */
+function absencesNonSignalees_() {
+  const actif = {};
+  actifs_(FEUILLES.ELEVES).forEach((e) => (actif[e.id] = true));
+  const deja = {};
+  versObjets_(FEUILLES.NOTIFICATIONS).forEach((n) => (deja[n.seance_id + '|' + n.eleve_id] = true));
+  const parSeance = {};
+  versObjets_(FEUILLES.PRESENCES).forEach((p) => {
+    if (p.statut === 'absent' && actif[p.eleve_id] && !deja[p.seance_id + '|' + p.eleve_id]) {
+      parSeance[p.seance_id] = (parSeance[p.seance_id] || 0) + 1;
+    }
+  });
+  return parSeance;
+}
+
+/**
+ * Termine l'appel d'une séance et prévient les parents des absents.
+ * Pendant l'appel, marquer un élève absent n'envoie rien : une erreur de doigt se corrige sans
+ * conséquence. C'est ce geste volontaire, fait une fois la liste relue, qui déclenche les messages.
+ * La fonction peut être relancée : elle n'envoie que pour les absents qui n'ont encore aucun message
+ * (par exemple un élève marqué absent après coup). Personne ne reçoit deux fois le même message.
+ */
+function cloturerAppel(jeton, seanceId) {
+  const u = exigerConnexion_(jeton);
+  const seance = chargerSeanceAvecEnseignant_(seanceId);
+  verifierAccesSeance_(seance, u);
+
+  // Sous verrou : on réserve une ligne « en attente » par message à envoyer. Un double clic, ou deux
+  // personnes qui terminent le même appel en même temps, ne trouvent donc plus rien à envoyer.
+  const aEnvoyer = avecVerrou_(() => {
+    const actuelle = trouverActifParId_(FEUILLES.SEANCES, seanceId);
+    if (!actuelle) throw new Error('Séance introuvable.');
+    const eleves = {};
+    actifs_(FEUILLES.ELEVES).forEach((e) => (eleves[e.id] = e));
+    const deja = {};
+    versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === seanceId).forEach((n) => (deja[n.eleve_id] = true));
+    const absents = versObjets_(FEUILLES.PRESENCES)
+      .filter((p) => p.seance_id === seanceId && p.statut === 'absent' && eleves[p.eleve_id] && !deja[p.eleve_id])
+      .map((p) => eleves[p.eleve_id]);
+    const maintenant = nowIso_();
+    const lignes = insererPlusieurs_(FEUILLES.NOTIFICATIONS, absents.map((e) => ({
+      seance_id: seanceId, eleve_id: e.id, telephone: e.parent_whatsapp,
+      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: maintenant,
+    })));
+    if (!actuelle.cloture_le) mettreAJour_(FEUILLES.SEANCES, seanceId, { cloture_le: maintenant });
+    return absents.map((e, i) => ({ notifId: lignes[i].id, eleve: e }));
+  });
+
+  // Hors verrou : les envois sont des appels réseau, ils ne doivent pas bloquer les autres utilisateurs.
+  aEnvoyer.forEach((x) => tenterEnvoi_(x.notifId, seance, x.eleve));
+
+  const ids = {};
+  aEnvoyer.forEach((x) => (ids[x.notifId] = true));
+  const echoues = versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => ids[n.id] && n.statut !== 'envoye').length;
+  const eleves = lignesPointage_(seance);
+  journaliser_(u, 'seance.cloturer', libelleSeance_(seance),
+    aEnvoyer.length ? (aEnvoyer.length - echoues) + ' message(s) envoyé(s), ' + echoues + ' en échec' : 'aucun message à envoyer');
+  return {
+    seance: chargerSeanceAvecEnseignant_(seanceId), eleves: eleves,
+    envoyes: aEnvoyer.length - echoues, echoues: echoues, non_pointes: eleves.filter((e) => !e.statut).length,
+  };
+}
+
+/**
+ * Marque « présent » tous les élèves de la séance qui n'ont pas encore été pointés, en une seule
+ * écriture. Les élèves déjà pointés (présents ou absents) ne sont pas touchés, et aucun message
+ * n'est envoyé. Usage prévu : pointer d'abord les absents, puis valider le reste d'un geste.
+ */
+function pointerRestantsPresents(jeton, seanceId) {
+  const u = exigerConnexion_(jeton);
+  const seance = chargerSeanceAvecEnseignant_(seanceId);
+  verifierAccesSeance_(seance, u);
+  const nb = avecVerrou_(() => {
+    const dejaPointes = {};
+    versObjets_(FEUILLES.PRESENCES).filter((p) => p.seance_id === seanceId).forEach((p) => (dejaPointes[p.eleve_id] = true));
+    const maintenant = nowIso_();
+    const lignes = actifs_(FEUILLES.ELEVES)
+      .filter((e) => e.classe === seance.classe && !dejaPointes[e.id])
+      .map((e) => ({ seance_id: seanceId, eleve_id: e.id, statut: 'present', motif: '', horodatage: maintenant, pointe_par: u.id }));
+    insererPlusieurs_(FEUILLES.PRESENCES, lignes);
+    return lignes.length;
+  });
+  return { nb_pointes: nb, eleves: lignesPointage_(seance) };
 }
 
 // ── Tableau de bord et export ─────────────────────────────────────────
@@ -428,13 +823,15 @@ function tableauDeBord(jeton, depuisIso) {
   exigerAdmin_(jeton);
   if (depuisIso) dateIsoValide_(depuisIso, 'La date de début');
   const seanceParId = {};
-  versObjets_(FEUILLES.SEANCES).forEach((s) => (seanceParId[s.id] = s));
+  actifs_(FEUILLES.SEANCES).forEach((s) => (seanceParId[s.id] = s));
+  // Les pointages d'une séance placée dans la corbeille ne comptent plus dans les statistiques.
   const presences = versObjets_(FEUILLES.PRESENCES).filter((p) => {
-    if (!depuisIso) return true;
     const s = seanceParId[p.seance_id];
-    return s && s.date_seance >= depuisIso;
+    return s && (!depuisIso || s.date_seance >= depuisIso);
   });
-  const eleves = versObjets_(FEUILLES.ELEVES);
+  const eleves = actifs_(FEUILLES.ELEVES);
+  const eleveActif = {};
+  eleves.forEach((e) => (eleveActif[e.id] = true));
 
   const parClasse = {};
   presences.forEach((p) => {
@@ -472,7 +869,9 @@ function tableauDeBord(jeton, depuisIso) {
     seancesDuJour: listerSeances(jeton, { date: aujourdhui_() }),
     global: { presents: presentsTotal, total: total, taux: total ? Math.round((presentsTotal / total) * 100) : null },
     classes: classes, plusAbsents: plusAbsents, nbEleves: eleves.length,
-    notificationsEchouees: versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.statut === 'echoue').length,
+    seancesAPrevenir: Object.keys(absencesNonSignalees_()).filter((id) => seanceParId[id]).length,
+    notificationsEchouees: versObjets_(FEUILLES.NOTIFICATIONS)
+      .filter((n) => n.statut === 'echoue' && seanceParId[n.seance_id] && eleveActif[n.eleve_id]).length,
   };
 }
 

@@ -105,21 +105,15 @@ function envoyerMessageAbsence_(params) {
   return { messageId: id };
 }
 
-/**
- * Crée l'entrée de journal si elle n'existe pas (une seule fois par séance+élève,
- * même si l'élève est repointé plusieurs fois), puis tente l'envoi.
- */
-function declencherNotificationAbsence_(seance, eleve) {
-  const entree = avecVerrou_(() => {
-    const trouvee = versObjets_(FEUILLES.NOTIFICATIONS).find((n) => n.seance_id === seance.id && n.eleve_id === eleve.id);
-    if (trouvee) return trouvee;
-    return inserer_(FEUILLES.NOTIFICATIONS, {
-      seance_id: seance.id, eleve_id: eleve.id, telephone: eleve.parent_whatsapp,
-      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: nowIso_(),
-    });
-  });
-  if (entree.statut !== 'en_attente') return; // déjà envoyé, ou déjà marqué échoué (voir bouton « Renvoyer »)
-  tenterEnvoi_(entree.id, seance, eleve);
+// Les messages partent quand l'encadreur termine l'appel : voir cloturerAppel dans Api.gs, qui crée
+// une ligne par message (une seule par séance et par élève) puis appelle tenterEnvoi_.
+
+// Un message resté « en cours » plus longtemps que ce délai n'est plus en train de partir : l'exécution
+// qui devait l'envoyer s'est interrompue. On autorise alors à le renvoyer.
+const DELAI_ENVOI_BLOQUE_MS = 10 * 60 * 1000;
+
+function envoiBloque_(n) {
+  return n.statut === 'en_attente' && Date.now() - new Date(n.maj_le).getTime() > DELAI_ENVOI_BLOQUE_MS;
 }
 
 function tenterEnvoi_(notifId, seance, eleve) {
@@ -142,22 +136,25 @@ function tenterEnvoi_(notifId, seance, eleve) {
   }
 }
 
-function listerNotifications(jeton, statut) {
+function listerNotifications(jeton, statut, limite) {
   exigerAdmin_(jeton);
-  const seances = versObjets_(FEUILLES.SEANCES);
-  const eleves = versObjets_(FEUILLES.ELEVES);
+  const seances = actifs_(FEUILLES.SEANCES);
+  const eleves = actifs_(FEUILLES.ELEVES);
   return versObjets_(FEUILLES.NOTIFICATIONS)
     .filter((n) => !statut || n.statut === statut)
+    // Les messages d'une séance ou d'un élève placés dans la corbeille ne sont plus affichés.
+    .filter((n) => seances.some((x) => x.id === n.seance_id) && eleves.some((x) => x.id === n.eleve_id))
     .map((n) => {
-      const s = seances.find((x) => x.id === n.seance_id) || {};
-      const e = eleves.find((x) => x.id === n.eleve_id) || {};
+      const s = seances.find((x) => x.id === n.seance_id);
+      const e = eleves.find((x) => x.id === n.eleve_id);
       return Object.assign(sansLigne_(n), {
+        bloque: envoiBloque_(n), // resté « en cours » trop longtemps : l'écran propose de le renvoyer
         matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut, classe: s.classe,
         nom: e.nom, prenom: e.prenom, parent_nom: e.parent_nom,
       });
     })
     .sort((a, b) => String(b.maj_le).localeCompare(String(a.maj_le)))
-    .slice(0, 200);
+    .slice(0, limiteListe_(limite));
 }
 
 /** Réservé à l'administrateur, ou à l'enseignant responsable de la séance concernée. */
@@ -165,17 +162,17 @@ function renvoyerNotification(jeton, notifId) {
   const u = exigerConnexion_(jeton);
   const n = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
   if (!n) throw new Error('Notification introuvable.');
-  const seance = trouverParId_(FEUILLES.SEANCES, n.seance_id);
+  const seance = trouverActifParId_(FEUILLES.SEANCES, n.seance_id);
   if (u.role !== 'admin' && (!seance || seance.enseignant_id !== u.id)) {
     throw new Error('Cette séance ne vous est pas attribuée.');
   }
-  const eleve = trouverParId_(FEUILLES.ELEVES, n.eleve_id);
+  const eleve = trouverActifParId_(FEUILLES.ELEVES, n.eleve_id);
   if (!seance || !eleve) throw new Error("La séance ou l'élève de ce message n'existe plus.");
   // Vérification du statut et passage à « en_attente » sous verrou : un double clic n'envoie qu'un message.
   avecVerrou_(() => {
     const actuelle = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
-    if (!actuelle || actuelle.statut !== 'echoue') throw new Error('Seul un message échoué peut être renvoyé.');
-    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
+    if (!actuelle || (actuelle.statut !== 'echoue' && !envoiBloque_(actuelle))) throw new Error('Seul un message échoué peut être renvoyé.');
+    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente', maj_le: nowIso_() });
   });
   tenterEnvoi_(notifId, seance, eleve);
   return sansLigne_(trouverParId_(FEUILLES.NOTIFICATIONS, notifId));

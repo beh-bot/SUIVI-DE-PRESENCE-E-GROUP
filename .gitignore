@@ -1,4 +1,7 @@
 node_modules/
 # Identifiants de connexion de clasp : ne jamais les versionner
 .clasprc.json
+# Projet Apps Script visé par clasp : propre à chaque personne (copie de test ou production),
+# voir .clasp.json.example
+.clasp.json
 .env

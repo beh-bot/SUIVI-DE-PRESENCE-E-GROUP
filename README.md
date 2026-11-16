@@ -8,8 +8,12 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 
 - **Administrateur** : gère les élèves, les séances, les comptes, consulte le tableau de bord, exporte en CSV et PDF.
 - **Encadreur** : voit uniquement ses séances et y pointe « Présent » ou « Absent ».
-- **WhatsApp** : un message par absence (API WhatsApp Business Cloud de Meta), journal des envois, renvoi des échecs.
+- **WhatsApp** : pendant l'appel, rien n'est envoyé. Quand l'encadreur termine l'appel, un message part pour chaque absent (API WhatsApp Business Cloud de Meta). Journal des envois, renvoi des échecs.
 - **Comptes** : créés par l'administrateur, ou par lien d'invitation à usage unique valable 7 jours.
+- **Corbeille** : un élève ou une séance supprimés gardent leur historique et peuvent être rétablis.
+- **Sauvegarde** : copie des données dans un autre classeur, à la demande ou chaque nuit sur sept jours.
+- **Import** : une liste d'élèves se colle depuis un tableur ou se charge en CSV.
+- **Journal** : connexions et modifications sont tracées (qui, quoi, quand) et consultables par l'administrateur.
 
 ## Fichiers
 
@@ -18,20 +22,25 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `Code.gs` | Point d'entrée `doGet()` ; `?test=1` affiche un diagnostic du déploiement |
 | `Index.html` | Tout l'écran : application monopage en JavaScript natif, CSS intégré |
 | `Api.gs` | Fonctions appelées par l'écran : validation, élèves, séances, pointage, exports |
-| `Auth.gs` | Mots de passe (PBKDF2), sessions (jeton valable 12 h), limite de tentatives |
+| `Auth.gs` | Mots de passe (PBKDF2), sessions (jeton valable 12 h, stocké sous forme d'empreinte), limite de tentatives |
 | `Db.gs` | Lecture et écriture des feuilles, verrou, menu d'installation dans Sheets |
 | `WhatsApp.gs` | Envoi du message d'absence et journal des notifications |
+| `Sauvegarde.gs` | Copie des données dans un autre classeur, menu de sauvegarde |
+| `appsscript.json` | Manifeste Apps Script : moteur V8, accès à l'application web |
 | `tests/simulation.cjs` | Test du code serveur avec de faux services Google |
+| `tests/apercu-local.cjs` | Aperçu de l'application dans le navigateur, sans Google |
+| `DOCS/` | Explication de chaque modification, et audit de ce qu'il reste à faire |
 
-Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`. Un élève est rattaché à une séance par le texte de sa **classe**, qui doit être écrit exactement pareil des deux côtés.
+Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`, `Journal`. Un élève est rattaché à une séance par le texte de sa **classe**. Une classe saisie avec une autre casse ou d'autres espaces est ramenée à l'écriture existante.
 
 ## Installation
 
 1. Créer un classeur Google Sheets, puis ouvrir **Extensions > Apps Script**.
-2. Y créer les fichiers `Code`, `Auth`, `Db`, `Api`, `WhatsApp` (scripts) et `Index` (HTML), et y coller le contenu des fichiers du dépôt. Le dossier `tests/` ne se copie pas.
+2. Y créer les fichiers `Code`, `Auth`, `Db`, `Api`, `WhatsApp`, `Sauvegarde` (scripts) et `Index` (HTML), et y coller le contenu des fichiers du dépôt. Le dossier `tests/` ne se copie pas. Avec l'outil `clasp`, un `clasp push` remplace ce copier-coller : voir `DOCS/07-integration-continue-et-clasp.md`.
 3. Recharger le classeur. Dans le menu **Suivi de présence**, lancer « 1) Initialiser les feuilles », puis « 2) Créer un administrateur ».
 4. **Déployer > Nouveau déploiement > Application Web**, exécutée en tant que propriétaire. Le lien obtenu se termine par `/exec`.
 5. Ouvrir ce lien et se connecter. Ajouter `?test=1` au lien permet de vérifier que le déploiement répond.
+6. Dans le menu **Suivi de présence**, lancer « Activer la sauvegarde automatique ». La marche à suivre pour restaurer est dans `DOCS/08-corbeille-et-sauvegarde.md`.
 
 Après une mise à jour du code, il faut créer une nouvelle version du déploiement, puis lancer « 3) Réparer les données » si l'écran affiche une erreur de données.
 
@@ -62,16 +71,25 @@ Le modèle reçoit quatre variables, dans cet ordre : nom de l'élève, matière
 ## Tests
 
 ```
-node tests/simulation.cjs
+npm test
 ```
 
-Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement.
+Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement. GitHub le lance automatiquement à chaque envoi de code et sur chaque pull request. Le guide de test manuel, à suivre dans une copie de test Google avant toute mise en production, est dans `DOCS/12-guide-de-test.md`.
+
+## Aperçu local
+
+```
+node tests/apercu-local.cjs
+```
+
+Ouvre l'application sur http://localhost:8765 avec des données de démonstration, sans déploiement. Les comptes et les différences avec la vraie application sont décrits dans `DOCS/06-apercu-local.md`.
 
 ## Limites connues
 
 - Chaque requête relit les feuilles concernées en entier : l'application convient à un centre, pas à des dizaines de milliers de pointages.
-- Les listes de séances et de messages sont limitées aux 200 plus récentes.
-- Un « Absent » envoie le message tout de suite ; un pointage fait par erreur ne peut pas être rattrapé auprès du parent.
+- Les listes de séances et de messages affichent 200 lignes, puis 200 de plus à la demande, jusqu'à 2 000.
+- Les sauvegardes sont sur le même compte Google que le classeur : elles protègent d'une erreur, pas de la perte du compte.
+- Les parents ne sont prévenus que lorsque l'appel est terminé : un appel laissé ouvert n'envoie rien. Un rappel reste affiché tant qu'il reste des absences non signalées.
 - « Envoyé » signifie accepté par Meta, pas remis au parent.
 - Toute personne ayant accès au classeur voit toutes les données : ne le partager qu'avec l'administrateur.
-- Le manifeste `appsscript.json` et la configuration `clasp` ne sont pas dans le dépôt : la mise en production se fait par copier-coller.
+- Le manifeste `appsscript.json` du dépôt a été déduit du code : il faut le comparer à celui de la production avant le premier `clasp push` vers elle.

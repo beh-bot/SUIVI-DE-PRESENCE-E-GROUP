@@ -1,0 +1,19 @@
+# Lance les tests du serveur à chaque envoi de code et sur chaque pull request.
+# Un échec apparaît en rouge sur GitHub, avant la fusion.
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests du serveur (faux services Google)
+        run: npm test

@@ -7,118 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const assert = require('assert');
+const { creerEnvironnement, racine } = require('./faux-google.cjs');
 
-const racine = path.join(__dirname, '..');
-const FICHIERS = ['Code.gs', 'Auth.gs', 'Db.gs', 'Api.gs', 'WhatsApp.gs'];
-
-// ── Imitations des services Google ──────────────────────────────────────
-const signe = (b) => Array.from(b, (o) => (o > 127 ? o - 256 : o));
-const octets = (a) => Buffer.from(a.map((o) => o & 255));
-
-function creerFeuille(nom) {
-  const cellules = []; // cellules[ligne][colonne], base 0
-  const feuille = {
-    lectures: 0,
-    getName: () => nom,
-    getLastRow: () => cellules.length,
-    getMaxRows: () => Math.max(cellules.length, 1000),
-    setFrozenRows() {},
-    deleteRow(n) { cellules.splice(n - 1, 1); },
-    getDataRange: () => feuille.getRange(1, 1, Math.max(cellules.length, 1), Math.max(1, ...cellules.map((l) => l.length))),
-    getRange(l, c, nl, nc) {
-      return {
-        getValues() {
-          feuille.lectures++;
-          const res = [];
-          for (let i = 0; i < nl; i++) {
-            const ligne = [];
-            for (let j = 0; j < nc; j++) ligne.push((cellules[l - 1 + i] || [])[c - 1 + j] ?? '');
-            res.push(ligne);
-          }
-          return res;
-        },
-        setValues(v) {
-          v.forEach((ligne, i) => {
-            while (cellules.length < l + i) cellules.push([]);
-            ligne.forEach((val, j) => { cellules[l - 1 + i][c - 1 + j] = val; });
-          });
-        },
-        setNumberFormats() {},
-        setNumberFormat() {},
-      };
-    },
-  };
-  return feuille;
-}
-
-const feuilles = {};
-const classeur = {
-  getId: () => 'classeur-test',
-  getSpreadsheetTimeZone: () => 'UTC',
-  getSheetByName: (n) => feuilles[n] || null,
-  insertSheet: (n) => (feuilles[n] = creerFeuille(n)),
-  getSheets: () => Object.values(feuilles),
-  deleteSheet: (f) => { delete feuilles[f.getName()]; },
-};
-const alertes = [];
-const interfaceSheets = { alert: (m) => alertes.push(m), ButtonSet: {}, Button: {} };
-let dansSheets = true; // false = on simule l'application web (pas d'interface Google Sheets)
-const SpreadsheetApp = {
-  getActiveSpreadsheet: () => classeur,
-  openById: () => classeur,
-  flush() {},
-  getUi() { if (!dansSheets) throw new Error('getUi indisponible dans ce contexte'); return interfaceSheets; },
-};
-
-const proprietes = {};
-const PropertiesService = {
-  getScriptProperties: () => ({
-    getProperty: (k) => (k in proprietes ? proprietes[k] : null),
-    setProperty: (k, v) => { proprietes[k] = String(v); },
-    deleteProperty: (k) => { delete proprietes[k]; },
-    getProperties: () => Object.assign({}, proprietes),
-  }),
-};
-const cache = {};
-const CacheService = {
-  getScriptCache: () => ({
-    get: (k) => (k in cache ? cache[k] : null),
-    put: (k, v) => { cache[k] = String(v); },
-    remove: (k) => { delete cache[k]; },
-  }),
-};
-const verrou = { tenu: false, prises: 0 };
-const LockService = {
-  getScriptLock: () => ({
-    waitLock() { assert(!verrou.tenu, 'verrou demandé alors qu\'il est déjà tenu (non réentrant)'); verrou.tenu = true; verrou.prises++; },
-    releaseLock() { verrou.tenu = false; },
-  }),
-};
-const Utilities = {
-  getUuid: () => crypto.randomUUID(),
-  DigestAlgorithm: { SHA_256: 1 },
-  Charset: { UTF_8: 1 },
-  computeDigest: (a, t) => signe(crypto.createHash('sha256').update(t, 'utf8').digest()),
-  computeHmacSha256Signature: (v, k) => signe(crypto.createHmac('sha256', octets(k)).update(octets(v)).digest()),
-  newBlob: (s) => ({ getBytes: () => signe(Buffer.from(s, 'utf8')), getAs: () => ({ getBytes: () => signe(Buffer.from('%PDF-faux')) }) }),
-  base64Encode: (b) => octets(b).toString('base64'),
-  formatDate(d, tz, f) {
-    const p = (n) => String(n).padStart(2, '0');
-    return f.replace('yyyy', d.getUTCFullYear()).replace('MM', p(d.getUTCMonth() + 1)).replace('dd', p(d.getUTCDate()))
-      .replace('HH', p(d.getUTCHours())).replace('mm', p(d.getUTCMinutes())).replace('ss', p(d.getUTCSeconds()));
-  },
-};
-const Session = { getScriptTimeZone: () => 'UTC' };
-const ScriptApp = { getService: () => ({ getUrl: () => 'https://script.example/exec' }) };
-const Logger = { log() {} };
-const UrlFetchApp = { fetch() { throw new Error('aucun appel réseau attendu pendant les tests'); } };
-const HtmlService = {};
-
-// ── Chargement du code serveur ──────────────────────────────────────────
-const source = FICHIERS.map((f) => fs.readFileSync(path.join(racine, f), 'utf8')).join('\n');
-const noms = [...source.matchAll(/^function (\w+)\(/gm)].map((m) => m[1]);
-const services = { SpreadsheetApp, PropertiesService, CacheService, LockService, Utilities, Session, ScriptApp, Logger, UrlFetchApp, HtmlService };
-const S = new Function(...Object.keys(services), `${source}\nreturn { ${noms.join(', ')}, FEUILLES };`)(...Object.values(services));
+const { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte, compteurs } = creerEnvironnement();
 
 let nbTests = 0;
 function test(nom, fn) {
@@ -135,20 +26,41 @@ test('seules les fonctions prévues sont appelables depuis le navigateur', () =>
   const html = fs.readFileSync(path.join(racine, 'Index.html'), 'utf8');
   // Appels directs api('nom', …) / appel('nom', …), et indirects exporterPdf(el, 'nom').
   const appelees = new Set([...html.matchAll(/(?:api|appel|exporterPdf)\((?:el, )?'(\w+)'/g)].map((m) => m[1]));
-  const horsEcran = ['doGet', 'onOpen', 'initialiserFeuilles', 'creerAdministrateurDepuisMenu', 'reparerDonnees'];
+  const horsEcran = [
+    'doGet', 'onOpen', // réservées par Google
+    'initialiserFeuilles', 'creerAdministrateurDepuisMenu', 'reparerDonnees', // menu Google Sheets
+    'sauvegarderMaintenant', 'activerSauvegardeAutomatique', 'desactiverSauvegardeAutomatique', // menu Google Sheets
+    'sauvegardeAutomatique', // déclencheur nocturne (protégée par ses propres garde-fous, testés plus bas)
+  ];
   const inattendues = publiques.filter((n) => !appelees.has(n) && !horsEcran.includes(n));
   assert.deepStrictEqual(inattendues, [], 'fonctions publiques non utilisées par l\'écran (ajoutez « _ » à leur nom)');
   [...appelees].forEach((n) => assert(publiques.includes(n), 'l\'écran appelle une fonction absente : ' + n));
 });
 
+test('les scripts de Index.html sont syntaxiquement valides', () => {
+  const html = fs.readFileSync(path.join(racine, 'Index.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert(scripts.length >= 1, 'aucun script trouvé dans Index.html');
+  scripts.forEach((s) => new Function(s[1])); // lève une SyntaxError si le script est invalide
+});
+
+test('le déploiement par clasp envoie exactement les fichiers de l\'application', () => {
+  const manifeste = JSON.parse(fs.readFileSync(path.join(racine, 'appsscript.json'), 'utf8'));
+  assert.strictEqual(manifeste.runtimeVersion, 'V8', 'le code utilise une syntaxe qui exige le moteur V8');
+  const autorises = fs.readFileSync(path.join(racine, '.claspignore'), 'utf8').split(/\r?\n/)
+    .filter((l) => l.startsWith('!')).map((l) => l.slice(1)).sort();
+  const attendus = fs.readdirSync(racine).filter((f) => /\.(gs|html)$/.test(f)).concat('appsscript.json').sort();
+  assert.deepStrictEqual(autorises, attendus, '.claspignore doit lister chaque fichier .gs et .html de la racine, et rien d\'autre');
+});
+
 test('initialisation des feuilles, refusée hors de Google Sheets', () => {
-  dansSheets = false;
+  contexte.dansSheets = false;
   echoue(() => S.initialiserFeuilles(), /getUi/);
   assert.strictEqual(Object.keys(feuilles).length, 0);
-  dansSheets = true;
+  contexte.dansSheets = true;
   S.initialiserFeuilles();
-  assert.strictEqual(Object.keys(feuilles).length, 6);
-  dansSheets = false;
+  assert.strictEqual(Object.keys(feuilles).length, 7);
+  contexte.dansSheets = false;
 });
 
 proprietes.WHATSAPP_DRY_RUN = 'true';
@@ -215,7 +127,22 @@ test('pointage : une seule ligne par élève, notification unique', () => {
   const l2 = S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade');
   assert.strictEqual(l2.statut, 'absent');
   assert.strictEqual(l2.motif, 'Malade');
-  assert.strictEqual(l2.notif_statut, 'envoye');
+  // Marquer absent n'envoie rien : le message part quand l'encadreur termine l'appel.
+  assert.strictEqual(l2.notif_statut, null);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, 0);
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 1);
+  // Une erreur de doigt se corrige sans conséquence : absent, puis présent, puis absent à nouveau.
+  S.pointerEleve(prof.jeton, seance.id, eleve.id, 'present', '');
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 0);
+  S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade');
+  const fin = S.cloturerAppel(prof.jeton, seance.id);
+  assert.deepStrictEqual([fin.envoyes, fin.echoues, fin.non_pointes], [1, 0, 1]);
+  assert(fin.seance.cloture_le, 'la séance doit porter la date de fin d\'appel');
+  assert.strictEqual(fin.eleves.find((l) => l.id === eleve.id).notif_statut, 'envoye');
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 0);
+  // Relancer la clôture n'envoie rien de plus : personne ne reçoit deux fois le même message.
+  assert.strictEqual(S.cloturerAppel(prof.jeton, seance.id).envoyes, 0);
+  assert.strictEqual(S.cloturerAppel(prof.jeton, seance.id).seance.cloture_le, fin.seance.cloture_le);
   // Corriger le motif ne doit pas changer l'heure du pointage d'origine.
   S.mettreAJour_(S.FEUILLES.PRESENCES, S.versObjets_(S.FEUILLES.PRESENCES)[0].id, { horodatage: '2026-11-16T08:31:00.000Z' });
   const l3 = S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade (certificat)');
@@ -276,14 +203,374 @@ test('suppression d\'un compte avec transfert des séances', () => {
   echoue(() => S.connexion('kone.adama', 'nouveaupasse9'), /incorrect/);
 });
 
-test('suppressions en cascade', () => {
+test('un classeur installé avant la mise à jour reçoit la nouvelle colonne', () => {
+  // On retire l'en-tête et les valeurs de la colonne supprime_le, comme dans un classeur d'avant la corbeille.
+  const f = feuilles.Eleves;
+  const colonne = S.FEUILLES.ELEVES.entetes.indexOf('supprime_le') + 1;
+  f.getRange(1, colonne, f.getLastRow(), 1).setValues(Array.from({ length: f.getLastRow() }, () => ['']));
+  S.inserer_(S.FEUILLES.PRESENCES, { seance_id: 'x', eleve_id: 'x', statut: 'present' }); // une écriture ailleurs vide le cache
+  S.supprimerToutesLignesOu_(S.FEUILLES.PRESENCES, (p) => p.seance_id === 'x');
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 3, 'sans la colonne, tous les élèves restent actifs');
+  assert.strictEqual(f.getRange(1, colonne, 1, 1).getValues()[0][0], 'supprime_le', 'en-tête non ajouté');
+});
+
+test('corbeille : un élève supprimé garde son historique et peut être rétabli', () => {
   S.supprimerEleve(admin.jeton, eleve.id);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 2);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).length, 1, 'le pointage doit être conservé');
+  echoue(() => S.supprimerEleve(admin.jeton, eleve.id), /introuvable/);
+  echoue(() => S.pointerEleve(admin.jeton, seance.id, eleve.id, 'present', ''), /introuvable/);
+  echoue(() => S.modifierEleve(admin.jeton, eleve.id, { nom: 'A', prenom: 'B', classe: 'C', parent_nom: 'D', parent_whatsapp: '+2250700000009' }), /introuvable/);
+  // L'ancienne feuille de présence ne change pas : l'élève pointé y figure toujours ; l'autre élève de la classe aussi.
+  const lignes = S.ouvrirPointage(admin.jeton, seance.id).eleves;
+  assert.strictEqual(lignes.length, 2);
+  assert.strictEqual(lignes.find((l) => l.id === eleve.id).statut, 'absent');
+  assert.strictEqual(S.listerSeances(admin.jeton, {})[0].attendus, 2);
+  // Une nouvelle séance ne l'attend plus.
+  const nouvelle = S.creerSeance(admin.jeton, { matiere: 'Anglais', date_seance: '2026-11-17', heure_debut: '09:00', classe: '3e A' });
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, nouvelle.id).eleves.length, 1);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).plusAbsents.length, 0, 'un élève de la corbeille ne figure plus au tableau de bord');
+  assert.strictEqual(S.listerNotifications(admin.jeton, null).length, 0);
+  assert.strictEqual(S.historiqueEleve(admin.jeton, eleve.id).absences, 1, 'son historique reste consultable');
+  const c = S.listerCorbeille(admin.jeton);
+  assert.deepStrictEqual([c.eleves.length, c.eleves[0].nb_pointages, c.seances.length], [1, 1, 1]); // la séance « Français » supprimée plus haut y est aussi
+  echoue(() => S.listerCorbeille(prof.jeton), /SESSION_EXPIREE/); // compte supprimé plus haut
+  S.restaurerEleve(admin.jeton, eleve.id);
+  echoue(() => S.restaurerEleve(admin.jeton, eleve.id), /introuvable/);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, 3);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).plusAbsents.length, 1);
+});
+
+test('corbeille : une séance supprimée ne compte plus, puis revient intacte', () => {
+  S.supprimerSeance(admin.jeton, seance.id);
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).some((s) => s.id === seance.id), false);
+  echoue(() => S.ouvrirPointage(admin.jeton, seance.id), /introuvable/);
+  echoue(() => S.exporterPdfSeance(admin.jeton, seance.id), /introuvable/);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).global.total, 0);
+  assert.strictEqual(S.historiqueEleve(admin.jeton, eleve.id).total, 0);
+  assert.strictEqual(S.listerCorbeille(admin.jeton).seances[0].nb_pointages, 1);
+  S.restaurerSeance(admin.jeton, seance.id);
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).global.total, 1);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.length, 2);
+});
+
+test('sauvegarde manuelle : une copie fidèle dans un autre classeur', () => {
+  contexte.dansSheets = false;
+  echoue(() => S.sauvegarderMaintenant(), /getUi/);
+  assert.strictEqual(Object.keys(classeurs).length, 1);
+  contexte.dansSheets = true;
+  S.sauvegarderMaintenant();
+  contexte.dansSheets = false;
+  const copie = Object.values(classeurs).find((c) => c.getId() !== 'classeur-test');
+  assert(copie && copie.getName().includes('manuelle'), alertes[alertes.length - 1]);
+  assert.deepStrictEqual(Object.keys(copie.feuilles).sort(), Object.keys(feuilles).sort());
+  Object.keys(feuilles).forEach((n) => {
+    assert.deepStrictEqual(copie.feuilles[n].getDataRange().getValues(), feuilles[n].getDataRange().getValues(), 'feuille ' + n + ' différente');
+  });
+  // La copie est indépendante : modifier l'original ne la touche pas.
+  const avant = JSON.stringify(copie.feuilles.Eleves.getDataRange().getValues());
+  S.creerEleve(admin.jeton, { nom: 'Après', prenom: 'Sauvegarde', classe: '3e A', parent_nom: 'P', parent_whatsapp: '+2250700000010' });
+  assert.strictEqual(JSON.stringify(copie.feuilles.Eleves.getDataRange().getValues()), avant);
+  assert(!verrou.tenu);
+});
+
+test('sauvegarde automatique : inactive par défaut, une fois par jour, classeur réutilisé', () => {
+  const nb = () => Object.keys(classeurs).length;
+  const depart = nb();
+  S.sauvegardeAutomatique(); // appel depuis le navigateur alors que rien n'est activé : sans effet
+  assert.strictEqual(nb(), depart);
+  contexte.dansSheets = true;
+  S.activerSauvegardeAutomatique();
+  S.activerSauvegardeAutomatique(); // deux activations ne créent pas deux déclencheurs
+  contexte.dansSheets = false;
+  assert.strictEqual(declencheurs.length, 1);
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1);
+  S.sauvegardeAutomatique(); // moins de 20 h après : sans effet
+  assert.strictEqual(nb(), depart + 1);
+  proprietes.SAUVEGARDE_DERNIERE_MS = String(Date.now() - 7 * 864e5); // une semaine plus tard, même jour de la semaine
+  S.creerEleve(admin.jeton, { nom: 'Nouveau', prenom: 'Venu', classe: '3e A', parent_nom: 'P', parent_whatsapp: '+2250700000011' });
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1, 'le classeur du même jour doit être réécrit, pas recréé');
+  const idJour = Object.keys(proprietes).filter((k) => k.startsWith('SAUVEGARDE_JOUR_')).map((k) => proprietes[k]);
+  assert.strictEqual(idJour.length, 1);
+  assert.deepStrictEqual(classeurs[idJour[0]].feuilles.Eleves.getDataRange().getValues(), feuilles.Eleves.getDataRange().getValues());
+  contexte.dansSheets = true;
+  S.desactiverSauvegardeAutomatique();
+  contexte.dansSheets = false;
+  assert.strictEqual(declencheurs.length, 0);
+  proprietes.SAUVEGARDE_DERNIERE_MS = '0';
+  S.sauvegardeAutomatique();
+  assert.strictEqual(nb(), depart + 1);
+});
+
+test('suppression définitive : seulement depuis la corbeille, avec les pointages', () => {
+  echoue(() => S.supprimerEleveDefinitivement(admin.jeton, eleve.id), /corbeille/);
+  echoue(() => S.supprimerSeanceDefinitivement(admin.jeton, seance.id), /corbeille/);
+  S.supprimerEleve(admin.jeton, eleve.id);
+  S.supprimerEleveDefinitivement(admin.jeton, eleve.id);
   assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).length, 0);
   assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, 0);
-  assert.strictEqual(S.versObjets_(S.FEUILLES.ELEVES).length, 2);
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.ELEVES, eleve.id), null);
   S.supprimerSeance(admin.jeton, seance.id);
-  assert.strictEqual(S.versObjets_(S.FEUILLES.SEANCES).length, 0);
+  S.supprimerSeanceDefinitivement(admin.jeton, seance.id);
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.SEANCES, seance.id), null);
   assert(!verrou.tenu && verrou.prises > 0);
+});
+
+test('import d\'élèves : séparateurs, guillemets, titres, doublons, tout ou rien', () => {
+  assert.deepStrictEqual(S.analyserCsv_('a;"b;c";"d ""e"""\r\n\r\nf;g;h'), [['a', 'b;c', 'd "e"'], ['f', 'g', 'h']]);
+  assert.deepStrictEqual(S.analyserCsv_('a\tb, c\nd\te'), [['a', 'b, c'], ['d', 'e']]);
+  const avant = S.listerEleves(admin.jeton).length;
+  const liste = [
+    'Nom;Prénom;Classe;Parent;WhatsApp',
+    'Konan;Akissi;6e Z;Mme Konan;+225 07 00 00 01 01',
+    '"Touré";"Ali";6e Z;"M. Touré; père";002250700000102',
+    'Yao;Aya;3e A;M. Yao;+2250700000002', // déjà enregistrée
+    'Konan;akissi;6e Z;Mme Konan;+2250700000101', // doublon dans la liste
+  ].join('\n');
+  // Une ligne fausse : rien n'est écrit, et la ligne est désignée par son numéro dans le texte.
+  const rate = S.importerEleves(admin.jeton, liste + '\nSeul;Nom\nBah;Awa;6e Z;Mme Bah;0700', false);
+  assert.strictEqual(rate.ok, false);
+  assert.deepStrictEqual(rate.erreurs.map((e) => e.ligne), [6, 7]);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, avant);
+  // Simulation : le bilan sans écrire.
+  const bilan = S.importerEleves(admin.jeton, liste, true);
+  assert.deepStrictEqual([bilan.ok, bilan.ajoutes, bilan.ignores, bilan.classes], [true, 2, 2, [{ classe: '6e Z', nb: 2 }]]);
+  assert.strictEqual(S.listerEleves(admin.jeton).length, avant);
+  // Import réel, en une seule écriture.
+  const prises = verrou.prises;
+  assert.strictEqual(S.importerEleves(admin.jeton, liste, false).ajoutes, 2);
+  assert.strictEqual(verrou.prises, prises + 2); // une prise pour l'import, une pour la ligne de journal
+  const importes = S.listerEleves(admin.jeton).filter((e) => e.classe === '6e Z');
+  assert.deepStrictEqual(importes.map((e) => [e.nom, e.parent_nom, e.parent_whatsapp]),
+    [['Konan', 'Mme Konan', '+2250700000101'], ['Touré', 'M. Touré; père', '+2250700000102']]);
+  assert(importes.every((e) => e.id && e.cree_le && !e.supprime_le));
+  assert.strictEqual(S.importerEleves(admin.jeton, liste, false).ajoutes, 0, 'un second import ne duplique rien');
+  echoue(() => S.importerEleves(admin.jeton, '  ', false), /vide/);
+  echoue(() => S.importerEleves(admin.jeton, 'Nom;Prénom', false), /aucun élève/);
+  echoue(() => S.importerEleves('faux-jeton', liste, false), /SESSION_EXPIREE/);
+});
+
+test('« les autres sont présents » : ne touche pas les élèves déjà pointés', () => {
+  const s = S.creerSeance(admin.jeton, { matiere: 'Histoire', date_seance: '2026-11-18', heure_debut: '14:00', classe: '6e Z' });
+  const [konan, toure] = S.ouvrirPointage(admin.jeton, s.id).eleves;
+  S.creerEleve(admin.jeton, { nom: 'Zadi', prenom: 'Luc', classe: '6e Z', parent_nom: 'M. Zadi', parent_whatsapp: '+2250700000103' });
+  S.pointerEleve(admin.jeton, s.id, konan.id, 'absent', 'Malade');
+  const notifs = S.versObjets_(S.FEUILLES.NOTIFICATIONS).length;
+  const rep = S.pointerRestantsPresents(admin.jeton, s.id);
+  assert.strictEqual(rep.nb_pointes, 2);
+  assert.deepStrictEqual(rep.eleves.map((e) => e.statut), ['absent', 'present', 'present']);
+  assert.strictEqual(rep.eleves.find((e) => e.id === konan.id).motif, 'Malade');
+  assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, notifs, 'aucun message ne doit partir');
+  assert.strictEqual(S.pointerRestantsPresents(admin.jeton, s.id).nb_pointes, 0);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.PRESENCES).filter((p) => p.seance_id === s.id).length, 3);
+  assert(toure.id && !verrou.tenu);
+  seance = s;
+});
+
+test('modification d\'une séance : les pointages sont conservés, la classe est figée', () => {
+  const maj = S.modifierSeance(admin.jeton, seance.id, { matiere: 'Histoire-Géographie', date_seance: '2026-11-19', heure_debut: '15:30', classe: '6e Z', enseignant_id: admin.id });
+  assert.deepStrictEqual([maj.matiere, maj.date_seance, maj.heure_debut, maj.enseignant_nom], ['Histoire-Géographie', '2026-11-19', '15:30', 'Awa Admin']);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.filter((e) => e.statut).length, 3);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '2026-11-19', heure_debut: '15:30', classe: '3e A' }), /classe ne peut plus/);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '19/11/2026', heure_debut: '15:30', classe: '6e Z' }), /invalide/);
+  echoue(() => S.modifierSeance(admin.jeton, seance.id, { matiere: 'X', date_seance: '2026-11-19', heure_debut: '15:30', classe: '6e Z', enseignant_id: prof.id }), /Encadreur introuvable/);
+  echoue(() => S.modifierSeance(admin.jeton, 'inconnue', {}), /introuvable/);
+  // Sans pointage, la classe peut encore être corrigée.
+  const vide = S.creerSeance(admin.jeton, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Y' });
+  assert.strictEqual(S.modifierSeance(admin.jeton, vide.id, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Z' }).classe, '6e Z');
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.SEANCES, vide.id).enseignant_id, admin.id, 'sans encadreur fourni, celui de la séance est gardé');
+});
+
+test('connexion : un identifiant inconnu coûte autant de calcul qu\'un mot de passe faux', () => {
+  const cout = (identifiant) => {
+    Object.keys(cache).forEach((k) => delete cache[k]);
+    const avant = compteurs.hmac;
+    echoue(() => S.connexion(identifiant, 'mauvais-mot-de-passe'), /Identifiant ou mot de passe incorrect/);
+    return compteurs.hmac - avant;
+  };
+  const existant = cout('awa.admin');
+  assert(existant >= 2000, 'le mot de passe doit être vérifié par le calcul lent');
+  assert.strictEqual(cout('personne.ici'), existant);
+  Object.keys(cache).forEach((k) => delete cache[k]);
+});
+
+test('sessions : le jeton n\'est pas stocké, seulement son empreinte', () => {
+  const s = S.connexion('awa.admin', 'motdepasse1');
+  const cles = Object.keys(proprietes).filter((k) => k.startsWith('session_'));
+  assert(cles.length >= 1);
+  assert(!JSON.stringify(proprietes).includes(s.jeton), 'le jeton apparaît en clair dans les propriétés');
+  assert(cles.includes('session_' + crypto.createHash('sha256').update(s.jeton).digest('hex')));
+  assert.strictEqual(S.moi(s.jeton).nom, 'Awa Admin');
+  // Une session enregistrée à l'ancienne manière (clé = jeton en clair) n'est plus acceptée.
+  proprietes['session_ancien-jeton'] = JSON.stringify({ id: admin.id, expire: Date.now() + 60000 });
+  echoue(() => S.moi('ancien-jeton'), /SESSION_EXPIREE/);
+  echoue(() => S.moi({ toString: () => s.jeton }), /SESSION_EXPIREE/);
+  // Changer de mot de passe garde la session courante et coupe l'autre.
+  S.changerMonMotDePasse(s.jeton, 'motdepasse1', 'motdepasse1-bis');
+  S.moi(s.jeton);
+  echoue(() => S.moi(admin.jeton), /SESSION_EXPIREE/);
+  S.deconnexion(s.jeton);
+  echoue(() => S.moi(s.jeton), /SESSION_EXPIREE/);
+  admin = S.connexion('awa.admin', 'motdepasse1-bis');
+});
+
+test('journal : les actions sont tracées, sans secret, et lisibles par l\'administrateur seul', () => {
+  const journal = S.versObjets_(S.FEUILLES.JOURNAL);
+  const actions = journal.map((l) => l.action);
+  ['connexion', 'invitation.creer', 'invitation.accepter', 'compte.supprimer', 'compte.mot_de_passe', 'eleve.creer', 'eleve.importer',
+    'eleve.corbeille', 'eleve.retablir', 'eleve.effacer', 'seance.creer', 'seance.modifier', 'seance.corbeille', 'seance.retablir', 'seance.effacer',
+  ].forEach((a) => assert(actions.includes(a), 'action absente du journal : ' + a));
+  const import_ = journal.find((l) => l.action === 'eleve.importer');
+  assert.deepStrictEqual([import_.utilisateur_nom, import_.cible, import_.detail], ['Awa Admin', '2 élève(s)', '6e Z : 2']);
+  assert(journal.every((l) => l.id && l.horodatage));
+  // Ni mot de passe, ni jeton, ni numéro de téléphone dans le journal.
+  const brut = JSON.stringify(journal);
+  ['motdepasse', 'nouveaupasse9', admin.jeton, '+225'].forEach((secret) => assert(!brut.includes(secret), 'secret dans le journal : ' + secret));
+  // Une action refusée ou simulée ne laisse pas de trace.
+  const nb = journal.length;
+  echoue(() => S.supprimerEleve(admin.jeton, 'inconnu'), /introuvable/);
+  S.importerEleves(admin.jeton, 'Sow;Binta;6e Z;Mme Sow;+2250700000199', true);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.JOURNAL).length, nb);
+  // Lecture : les plus récentes d'abord, pour l'administrateur seulement.
+  const enc = S.creerUtilisateur(admin.jeton, { nom: 'Bamba Seydou', email: 'bamba.seydou', mot_de_passe: 'motdepasse5', role: 'enseignant' });
+  const lu = S.listerJournal(admin.jeton);
+  assert.deepStrictEqual([lu[0].action, lu[0].cible, lu[0].detail], ['compte.creer', 'bamba.seydou', 'enseignant']);
+  assert(!('utilisateur_id' in lu[0]));
+  const s = S.connexion('bamba.seydou', 'motdepasse5');
+  S.changerMonMotDePasse(s.jeton, 'motdepasse5', 'motdepasse5-perso');
+  echoue(() => S.listerJournal(s.jeton), /réservée/);
+  assert(enc.id);
+});
+
+test('mot de passe choisi par l\'administrateur : rien n\'est possible avant de l\'avoir changé', () => {
+  S.creerUtilisateur(admin.jeton, { nom: 'Koffi Jean', email: 'koffi.jean', mot_de_passe: 'provisoire1', role: 'enseignant' });
+  const s = S.connexion('koffi.jean', 'provisoire1');
+  assert.strictEqual(s.mdp_a_changer, true);
+  assert.strictEqual(S.moi(s.jeton).mdp_a_changer, true);
+  // Le serveur refuse tout, pas seulement l'écran.
+  echoue(() => S.listerSeances(s.jeton, {}), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.listerClasses(s.jeton), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.pointerEleve(s.jeton, seance.id, 'x', 'present', ''), /MOT_DE_PASSE_A_CHANGER/);
+  echoue(() => S.changerMonMotDePasse(s.jeton, 'provisoire1', 'provisoire1'), /différent/);
+  S.changerMonMotDePasse(s.jeton, 'provisoire1', 'bien-a-moi-1');
+  assert.strictEqual(S.moi(s.jeton).mdp_a_changer, false);
+  assert.deepStrictEqual(S.listerSeances(s.jeton, {}), []);
+  assert.strictEqual(S.connexion('koffi.jean', 'bien-a-moi-1').mdp_a_changer, false);
+  // L'administrateur remplace le mot de passe d'un autre : même obligation. Le sien : non.
+  const koffi = S.listerUtilisateurs(admin.jeton).find((u) => u.email === 'koffi.jean');
+  S.modifierUtilisateur(admin.jeton, koffi.id, { nom: 'Koffi Jean', email: 'koffi.jean', role: 'enseignant', mot_de_passe: 'remplace-99' });
+  assert.strictEqual(S.connexion('koffi.jean', 'remplace-99').mdp_a_changer, true);
+  S.modifierUtilisateur(admin.jeton, admin.id, { nom: 'Awa Admin', email: 'awa.admin', role: 'admin', mot_de_passe: 'motdepasse1-ter' });
+  assert.strictEqual(S.moi(admin.jeton).mdp_a_changer, false);
+  // Un compte créé par invitation a choisi son mot de passe lui-même.
+  const inv = S.creerInvitation(admin.jeton, { nom: 'Invité', role: 'enseignant' });
+  assert.strictEqual(S.moi(S.accepterInvitation(inv.id, { nom: 'Invité Libre', email: 'invite.libre', mot_de_passe: 'choisi-par-moi' }).jeton).mdp_a_changer, false);
+});
+
+test('classes : une seule écriture par classe, renommage et fusion', () => {
+  // « 6ez » et « 6E  Z » rejoignent la classe « 6e Z » existante.
+  const e = S.creerEleve(admin.jeton, { nom: 'Gnagne', prenom: 'Eric', classe: '6ez', parent_nom: 'P', parent_whatsapp: '+2250700000150' });
+  assert.strictEqual(e.classe, '6e Z');
+  assert.strictEqual(S.creerSeance(admin.jeton, { matiere: 'Musique', date_seance: '2026-11-21', heure_debut: '09:00', classe: '6E  Z' }).classe, '6e Z');
+  // Import : une classe nouvelle écrite de deux façons dans la même liste n'en fait qu'une.
+  S.importerEleves(admin.jeton, 'Aka;Paul;5e B;P;+2250700000151\nAka;Lea;5eb;P;+2250700000152', false);
+  assert.deepStrictEqual(S.listerEleves(admin.jeton).filter((x) => x.nom === 'Aka').map((x) => x.classe), ['5e B', '5e B']);
+  // Renommage : élèves et séances suivent, en deux écritures.
+  const nbEleves = S.listerEleves(admin.jeton).filter((x) => x.classe === '6e Z').length;
+  const r = S.renommerClasse(admin.jeton, '6e Z', '6e Zoulou');
+  assert.strictEqual(r.fusion, false);
+  assert.strictEqual(r.eleves, nbEleves);
+  assert(r.seances >= 2);
+  assert.strictEqual(S.listerEleves(admin.jeton).filter((x) => x.classe === '6e Z').length, 0);
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).seance.classe, '6e Zoulou');
+  assert.strictEqual(S.ouvrirPointage(admin.jeton, seance.id).eleves.filter((x) => x.statut).length, 3, 'les pointages suivent la classe renommée');
+  assert(!S.listerClasses(admin.jeton).includes('6e Z'));
+  // Fusion : donner le nom d'une classe existante (à la casse près) réunit les deux.
+  const f = S.renommerClasse(admin.jeton, '5e B', '6e zoulou');
+  assert.deepStrictEqual([f.fusion, f.classe, f.eleves], [true, '6e Zoulou', 2]);
+  echoue(() => S.renommerClasse(admin.jeton, 'Inexistante', 'X'), /introuvable/);
+  echoue(() => S.renommerClasse(admin.jeton, '6e Zoulou', '6e Zoulou'), /identique/);
+  echoue(() => S.renommerClasse(admin.jeton, '6e Zoulou', '  '), /obligatoire/);
+  assert(S.listerJournal(admin.jeton).some((l) => l.action === 'classe.fusionner' && l.cible === '5e B → 6e Zoulou'));
+  assert(!verrou.tenu);
+});
+
+test('listes longues : 200 lignes par défaut, davantage sur demande', () => {
+  assert.deepStrictEqual([undefined, 0, 'abc', 50, 200, 400.7, 99999].map(S.limiteListe_), [200, 200, 200, 200, 200, 400, 2000]);
+  const lot = Array.from({ length: 230 }, (_, i) => ({ matiere: 'Lot', date_seance: '2025-01-01', heure_debut: '08:00', classe: 'Lot ' + i, enseignant_id: admin.id }));
+  S.insererPlusieurs_(S.FEUILLES.SEANCES, lot);
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).length, 200);
+  const plus = S.listerSeances(admin.jeton, { limite: 400 });
+  assert(plus.length > 230 && plus.length < 400);
+  assert(plus[0].date_seance >= plus[plus.length - 1].date_seance, 'les plus récentes d\'abord');
+  assert(Array.isArray(S.listerNotifications(admin.jeton, null, 400)));
+});
+
+test('journal : un classeur sans feuille Journal la reçoit, et une panne du journal ne bloque pas l\'action', () => {
+  delete feuilles.Journal;
+  const e = S.creerEleve(admin.jeton, { nom: 'Sans', prenom: 'Journal', classe: '6e Z', parent_nom: 'P', parent_whatsapp: '+2250700000198' });
+  assert(feuilles.Journal, 'feuille Journal non recréée');
+  assert.strictEqual(S.versObjets_(S.FEUILLES.JOURNAL).length, 1);
+  // Panne : la feuille Journal refuse toute écriture. L'élève doit quand même être modifié.
+  const vraie = feuilles.Journal.getRange;
+  feuilles.Journal.getRange = () => { throw new Error('écriture refusée'); };
+  const maj = S.modifierEleve(admin.jeton, e.id, { nom: 'Sans', prenom: 'Journal', classe: '6e Y', parent_nom: 'P', parent_whatsapp: '+2250700000198' });
+  feuilles.Journal.getRange = vraie;
+  assert.strictEqual(maj.classe, '6e Y');
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.ELEVES, e.id).classe, '6e Y');
+  assert(!verrou.tenu, 'verrou non rendu après la panne');
+});
+
+test('fin d\'appel : échec d\'envoi, absent ajouté après coup, élève retiré, droits', () => {
+  S.importerEleves(admin.jeton, 'Un;A;CM2;P1;+2250700000301\nDeux;B;CM2;P2;+2250700000302\nTrois;C;CM2;P3;+2250700000303\nQuatre;D;CM2;P4;+2250700000304', false);
+  const dejaAPrevenir = S.tableauDeBord(admin.jeton, null).seancesAPrevenir; // une séance d'un test précédent n'a pas été terminée
+  const s = S.creerSeance(admin.jeton, { matiere: 'Calcul', date_seance: '2026-11-23', heure_debut: '08:00', classe: 'CM2' });
+  const [deux, quatre, trois, un] = S.ouvrirPointage(admin.jeton, s.id).eleves; // ordre alphabétique
+  assert.deepStrictEqual([deux.nom, quatre.nom, trois.nom, un.nom], ['Deux', 'Quatre', 'Trois', 'Un']);
+  S.pointerEleve(admin.jeton, s.id, un.id, 'absent', '');
+  S.pointerEleve(admin.jeton, s.id, deux.id, 'absent', '');
+  S.pointerEleve(admin.jeton, s.id, trois.id, 'present', '');
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).seancesAPrevenir, dejaAPrevenir + 1);
+  // Un élève placé dans la corbeille avant la fin de l'appel n'est pas prévenu.
+  S.supprimerEleve(admin.jeton, deux.id);
+  // Un encadreur à qui la séance n'est pas attribuée ne peut pas la terminer.
+  const autre = S.connexion('koffi.jean', 'remplace-99');
+  S.changerMonMotDePasse(autre.jeton, 'remplace-99', 'koffi-perso-1');
+  echoue(() => S.cloturerAppel(autre.jeton, s.id), /pas attribuée/);
+  echoue(() => S.cloturerAppel('faux', s.id), /SESSION_EXPIREE/);
+  // WhatsApp en panne : l'appel est quand même terminé, le message est marqué en échec et peut être renvoyé.
+  proprietes.WHATSAPP_DRY_RUN = 'false';
+  const rate = S.cloturerAppel(admin.jeton, s.id);
+  proprietes.WHATSAPP_DRY_RUN = 'true';
+  assert.deepStrictEqual([rate.envoyes, rate.echoues, rate.non_pointes], [0, 1, 1]);
+  const ligneUn = rate.eleves.find((l) => l.id === un.id);
+  assert.strictEqual(ligneUn.notif_statut, 'echoue');
+  assert(rate.seance.cloture_le);
+  assert.strictEqual(S.cloturerAppel(admin.jeton, s.id).envoyes, 0, 'un message en échec ne repart pas tout seul');
+  assert.strictEqual(S.renvoyerNotification(admin.jeton, ligneUn.notif_id).statut, 'envoye');
+  // Un absent ajouté après la fin de l'appel : rien ne part tant qu'on ne relance pas l'envoi.
+  S.pointerEleve(admin.jeton, s.id, quatre.id, 'absent', 'Arrivé puis reparti');
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).find((x) => x.id === s.id).a_prevenir, 1);
+  const suite = S.cloturerAppel(admin.jeton, s.id);
+  assert.deepStrictEqual([suite.envoyes, suite.echoues, suite.non_pointes], [1, 0, 0]);
+  assert.strictEqual(suite.seance.cloture_le, rate.seance.cloture_le, 'la date de fin d\'appel ne change pas');
+  const notifs = S.versObjets_(S.FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === s.id);
+  assert.deepStrictEqual(notifs.map((n) => n.eleve_id).sort(), [un.id, quatre.id].sort(), 'un message par absent actif, pas plus');
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).seancesAPrevenir, dejaAPrevenir);
+  assert(S.listerJournal(admin.jeton).some((l) => l.action === 'seance.cloturer' && /1 en échec/.test(l.detail)));
+  assert(!verrou.tenu);
+});
+
+test('message resté « en cours » : renvoyable seulement après dix minutes', () => {
+  const n = S.versObjets_(S.FEUILLES.NOTIFICATIONS).find((x) => x.statut === 'envoye');
+  S.mettreAJour_(S.FEUILLES.NOTIFICATIONS, n.id, { statut: 'en_attente', maj_le: new Date().toISOString() });
+  echoue(() => S.renvoyerNotification(admin.jeton, n.id), /Seul un message échoué/);
+  assert.strictEqual(S.listerNotifications(admin.jeton, 'en_attente').find((x) => x.id === n.id).bloque, false);
+  S.mettreAJour_(S.FEUILLES.NOTIFICATIONS, n.id, { maj_le: new Date(Date.now() - 11 * 60 * 1000).toISOString() });
+  assert.strictEqual(S.listerNotifications(admin.jeton, 'en_attente').find((x) => x.id === n.id).bloque, true);
+  assert.strictEqual(S.renvoyerNotification(admin.jeton, n.id).statut, 'envoye');
 });
 
 console.log(`${nbTests} tests réussis.`);

@@ -209,7 +209,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     modale.innerHTML = html;
     modale.onclick = (e) => { if (e.target === modale || e.target.closest('[data-fermer]')) modale.close(); };
     modale.onclose = null;
-    modale.showModal();
+    modale.oncancel = null;
+    if (!modale.open) modale.showModal();
   }
   function confirmer({ titre, message, bouton, danger = false }) {
     return new Promise((resolve) => {
@@ -254,6 +255,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
 
   function gererErreur(e) {
     if (e && e.message === 'SESSION_EXPIREE') { afficherConnexion('Votre session a expiré. Reconnectez-vous.'); return true; }
+    if (e && e.message === 'MOT_DE_PASSE_A_CHANGER') { if (utilisateur) utilisateur.mdp_a_changer = true; ouvrirFormMdp(true); return true; }
     toast(e ? e.message : 'Une erreur est survenue.', 'erreur', true);
     return false;
   }
@@ -279,6 +281,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     [/^#\/eleves\/([\w-]+)$/, 'eleves', vueHistorique],
     [/^#\/enseignants$/, 'enseignants', vueEnseignants],
     [/^#\/messages(?:\?(.*))?$/, 'messages', vueMessages],
+    [/^#\/corbeille$/, 'eleves', vueCorbeille],
+    [/^#\/journal$/, 'enseignants', vueJournal],
   ];
 
   async function router() {
@@ -327,6 +331,11 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
            <strong>${esc(pluriel(d.notificationsEchouees, "message WhatsApp n'a pas pu être envoyé", "messages WhatsApp n'ont pas pu être envoyés"))}.</strong>
            <span class="underline">Voir et renvoyer</span></a>`
       : '';
+    const aPrevenir = d.seancesAPrevenir
+      ? `<a href="#/seances" class="mt-4 block rounded-xl bg-attente-pale px-4 py-3 text-sm text-attente">
+           <strong>${esc(pluriel(d.seancesAPrevenir, 'séance a des absences non signalées aux parents', 'séances ont des absences non signalées aux parents'))}.</strong>
+           Ouvrez-les et terminez l'appel pour envoyer les messages. <span class="underline">Voir les séances</span></a>`
+      : '';
     const jour = d.seancesDuJour.length
       ? `<ul class="liste">${d.seancesDuJour.map(ligneSeance).join('')}</ul>`
       : carteVide("Aucune séance aujourd'hui", d.nbEleves ? 'Créez une séance pour faire l’appel de votre classe.' : "Commencez par ajouter vos élèves, puis créez une séance.",
@@ -357,6 +366,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <h1 class="titre-page">Tableau de bord</h1>
       <p class="text-ardoise">${esc(fmtDateLongue(d.aujourdhui))}</p>
       ${alerte}
+      ${aPrevenir}
       <h2 class="titre-section">Séances du jour</h2>
       ${jour}
       <div class="mb-2 mt-7 flex items-end justify-between gap-3">
@@ -382,12 +392,21 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
           ${s.presents ? `<span class="puce bg-present-pale text-present">${pluriel(s.presents, 'présent', 'présents')}</span>` : ''}
           ${s.absents ? `<span class="puce bg-absent-pale text-absent">${pluriel(s.absents, 'absent', 'absents')}</span>` : ''}
           ${restants ? `<span class="puce bg-papier text-ardoise">${restants} à pointer</span>` : ''}
+          ${s.a_prevenir ? `<span class="puce bg-attente-pale text-attente">${pluriel(s.a_prevenir, 'parent à prévenir', 'parents à prévenir')}</span>` : ''}
         </div></div></a></li>`;
+  }
+
+  // Listes longues : le serveur renvoie 200 lignes ; ce bouton en redemande 200 de plus.
+  const PAS_LISTE = 200;
+  const limites = { seances: PAS_LISTE, messages: PAS_LISTE };
+  function boutonPlusAnciennes(liste, nbRecues) {
+    if (nbRecues < limites[liste]) return ''; // tout est déjà affiché
+    return `<div class="mt-4 text-center"><button type="button" data-action="plus-anciennes" data-liste="${liste}" class="btn btn-secondaire">Afficher les plus anciennes</button></div>`;
   }
 
   async function vueSeances() {
     const admin = estAdmin();
-    const [seances, classes] = await Promise.all([api('listerSeances', {}), admin ? api('listerClasses') : Promise.resolve([])]);
+    const [seances, classes] = await Promise.all([api('listerSeances', { limite: limites.seances }), admin ? api('listerClasses') : Promise.resolve([])]);
     const aujourd = dateLocale();
     const groupes = [];
     seances.forEach((s) => {
@@ -407,25 +426,29 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         ${admin ? '<button type="button" data-action="nouvelle-seance" class="btn btn-primaire">Créer une séance</button>' : ''}
       </div>
       ${admin ? '' : '<p class="text-ardoise">Touchez une séance pour faire l\'appel : Présent ou Absent.</p>'}
-      ${liste}` };
+      ${liste}
+      ${boutonPlusAnciennes('seances', seances.length)}
+      ${admin ? LIEN_CORBEILLE : ''}` };
   }
 
-  async function ouvrirFormSeance() {
+  // Sans argument : nouvelle séance. Avec une séance : correction de cette séance.
+  async function ouvrirFormSeance(seance) {
     const [classes, comptesActifs] = await Promise.all([api('listerClasses'), api('listerUtilisateurs')]);
-    const parDefaut = (comptesActifs.find((u) => u.role === 'enseignant') || comptesActifs.find((u) => u.id === utilisateur.id) || comptesActifs[0]).id;
-    ouvrirModale(`<form data-form="seance" class="p-5" novalidate>
-      <h2 class="text-lg font-semibold">Nouvelle séance</h2>
+    const parDefaut = seance ? seance.enseignant_id
+      : (comptesActifs.find((u) => u.role === 'enseignant') || comptesActifs.find((u) => u.id === utilisateur.id) || comptesActifs[0]).id;
+    ouvrirModale(`<form data-form="seance" data-id="${esc(seance ? seance.id : '')}" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">${seance ? 'Modifier la séance' : 'Nouvelle séance'}</h2>
       <div class="mt-4 space-y-3">
         <div><label class="etiquette" for="s-matiere">Matière</label>
-          <input class="champ" id="s-matiere" name="matiere" list="liste-matieres" required autocomplete="off">
+          <input class="champ" id="s-matiere" name="matiere" list="liste-matieres" required autocomplete="off" value="${esc(seance ? seance.matiere : '')}">
           <datalist id="liste-matieres"><option value="Mathématiques"><option value="Physique-Chimie"><option value="Informatique"><option value="Français"><option value="Anglais"><option value="SVT"></datalist></div>
         <div><label class="etiquette" for="s-classe">Classe ou groupe</label>
-          <input class="champ" id="s-classe" name="classe" list="liste-classes-s" required autocomplete="off">
+          <input class="champ" id="s-classe" name="classe" list="liste-classes-s" required autocomplete="off" value="${esc(seance ? seance.classe : '')}">
           <datalist id="liste-classes-s">${classes.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
-          <p class="aide">Les élèves de cette classe seront attendus à l'appel.</p></div>
+          <p class="aide">${seance ? "La classe ne peut plus être changée une fois l'appel commencé." : "Les élèves de cette classe seront attendus à l'appel."}</p></div>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="etiquette" for="s-date">Date</label><input class="champ" id="s-date" name="date_seance" type="date" required value="${dateLocale()}"></div>
-          <div><label class="etiquette" for="s-heure">Heure de début</label><input class="champ" id="s-heure" name="heure_debut" type="time" required value="${new Date().toTimeString().slice(0, 5)}"></div>
+          <div><label class="etiquette" for="s-date">Date</label><input class="champ" id="s-date" name="date_seance" type="date" required value="${esc(seance ? seance.date_seance : dateLocale())}"></div>
+          <div><label class="etiquette" for="s-heure">Heure de début</label><input class="champ" id="s-heure" name="heure_debut" type="time" required value="${esc(seance ? seance.heure_debut : new Date().toTimeString().slice(0, 5))}"></div>
         </div>
         <div><label class="etiquette" for="s-ens">Encadreur qui fera l'appel</label>
           <select class="champ" id="s-ens" name="enseignant_id">
@@ -436,7 +459,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
       <div class="mt-5 flex justify-end gap-2">
         <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
-        <button type="submit" class="btn btn-primaire">Créer la séance</button>
+        <button type="submit" class="btn btn-primaire">${seance ? 'Enregistrer les modifications' : 'Créer la séance'}</button>
       </div></form>`);
   }
 
@@ -446,6 +469,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   function htmlNotif(e) {
     if (e.notif_statut === 'envoye') return `<span class="text-present">Message envoyé à ${esc(e.parent_nom)}.</span>`;
     if (e.notif_statut === 'en_attente') return `<span class="text-attente">Envoi du message au parent en cours…</span>`;
+    if (!e.notif_statut && e.statut === 'absent') return `<span class="text-attente">Le parent sera prévenu quand vous terminerez l'appel.</span>`;
     if (e.notif_statut === 'echoue') return `<span class="text-absent">Message non envoyé : ${esc(e.notif_erreur)}</span>
         <button type="button" data-action="renvoyer" data-notif="${esc(e.notif_id)}" class="btn btn-danger btn-petit mt-2 block">Renvoyer le message</button>`;
     return '';
@@ -478,6 +502,28 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <span class="puce bg-absent-pale text-absent">${pluriel(absents, 'absent', 'absents')}</span>
       <span class="puce bg-white text-ardoise">${restants} à pointer</span>`;
   }
+  // Fin de l'appel : c'est ce bouton, et lui seul, qui envoie les messages aux parents.
+  function htmlCloture(seance, eleves) {
+    if (!eleves.length) return '';
+    const n = eleves.filter((e) => e.statut === 'absent' && !e.notif_statut).length;
+    if (n) {
+      return `<div class="rounded-xl bg-attente-pale p-4">
+        <p class="text-sm text-attente"><strong>${pluriel(n, 'parent n\'a pas encore été prévenu', 'parents n\'ont pas encore été prévenus')}.</strong>
+          Relisez la liste, puis terminez l'appel pour envoyer les messages WhatsApp.</p>
+        <button type="button" data-action="cloturer-appel" class="btn btn-primaire mt-3 w-full">${seance.cloture_le ? '' : "Terminer l'appel et "}${seance.cloture_le ? 'Prévenir' : 'prévenir'} ${pluriel(n, 'parent', 'parents')}</button></div>`;
+    }
+    if (seance.cloture_le) return `<p class="text-sm text-ardoise">Appel terminé le ${esc(fmtHorodatage(seance.cloture_le))}. Les parents des absents ont été prévenus.</p>`;
+    return `<button type="button" data-action="cloturer-appel" class="btn btn-secondaire w-full">Terminer l'appel</button>
+      <p class="aide">Aucun parent à prévenir pour le moment.</p>`;
+  }
+  // Bouton « les autres sont présents » : n'apparaît que s'il reste des élèves à pointer.
+  function htmlRestants(eleves) {
+    const restants = eleves.filter((e) => !e.statut).length;
+    if (!restants) return '';
+    return `<button type="button" data-action="pointer-restants" class="btn btn-secondaire w-full">
+        ${restants === eleves.length ? 'Marquer tous les élèves présents' : `Marquer ${pluriel(restants, 'autre élève présent', 'autres élèves présents')}`}</button>
+      <p class="aide">Pointez d'abord les absents, puis validez le reste d'un seul geste.</p>`;
+  }
 
   let pt = null;
   async function vuePointage(id) {
@@ -493,19 +539,28 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <p class="text-ardoise">Classe ${esc(s.classe)}, ${esc(fmtDateLongue(s.date_seance))} à ${esc(s.heure_debut)}.${estAdmin() ? ` Encadreur : ${esc(s.enseignant_nom)}.` : ''}</p>
       <div id="resume" class="sticky top-0 z-10 -mx-4 mb-3 mt-4 flex flex-wrap gap-2 bg-papier/95 px-4 py-2 backdrop-blur md:-mx-8 md:px-8">${htmlResume(donnees.eleves)}</div>
       ${corps}
+      <div id="zone-restants" class="mt-3">${htmlRestants(donnees.eleves)}</div>
+      <div id="zone-cloture" class="mt-3">${htmlCloture(s, donnees.eleves)}</div>
       <h2 class="titre-section">${estAdmin() ? 'Exporter et gérer' : 'Exporter'}</h2>
       <div class="flex flex-wrap gap-2">
         <button type="button" data-action="exporter-pdf-seance" data-id="${esc(s.id)}" class="btn btn-primaire">Exporter en PDF</button>
         ${estAdmin() ? `<button type="button" data-action="exporter-csv" data-id="${esc(s.id)}" class="btn btn-secondaire">Exporter en CSV</button>
+        <button type="button" data-action="modifier-seance" class="btn btn-secondaire">Modifier la séance</button>
         <button type="button" data-action="supprimer-seance" data-id="${esc(s.id)}" class="btn btn-danger">Supprimer la séance</button>` : ''}
       </div>` };
+  }
+
+  function rafraichirZonesPointage() {
+    $('#resume').innerHTML = htmlResume(pt.eleves);
+    $('#zone-restants').innerHTML = htmlRestants(pt.eleves);
+    $('#zone-cloture').innerHTML = htmlCloture(pt.seance, pt.eleves);
   }
 
   function remplacerLigne(e, focusStatut) {
     const li = $(`#ligne-${esc(e.id)}`);
     if (!li) return;
     li.outerHTML = htmlLigne(e);
-    if (pt) $('#resume').innerHTML = htmlResume(pt.eleves);
+    if (pt) rafraichirZonesPointage();
     if (focusStatut) $(`#ligne-${esc(e.id)} [data-statut="${focusStatut}"]`)?.focus();
   }
 
@@ -516,17 +571,53 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     pointagesEnCours.add(eleveId);
     document.querySelectorAll(`#ligne-${eleveId} [data-action="pointer"]`).forEach((b) => (b.disabled = true));
     const li = $(`#ligne-${eleveId}`);
-    if (li && statut === 'absent') li.insertAdjacentHTML('beforeend', '<p class="mt-2 text-sm text-ardoise" data-attente-envoi>Envoi du message au parent…</p>');
     try {
       const ligne = await api('pointerEleve', pt.seance.id, eleveId, statut, statut === 'absent' ? (e.motif || '') : '');
       Object.assign(e, ligne);
       remplacerLigne(e, statut);
-      if (ligne.notif_statut === 'echoue') toast(`Message non envoyé au parent de ${e.prenom} ${e.nom} : ${ligne.notif_erreur}`, 'erreur', true);
     } catch (err) {
       if (!gererErreur(err)) remplacerLigne(e);
     } finally {
       pointagesEnCours.delete(eleveId);
     }
+  }
+
+  async function pointerRestants(bouton) {
+    if (!pt || pointagesEnCours.size) { toast('Un pointage est en cours : réessayez dans un instant.'); return; }
+    const restants = pt.eleves.filter((e) => !e.statut).length;
+    const ok = await confirmer({ titre: `Marquer ${pluriel(restants, 'élève présent', 'élèves présents')} ?`,
+      message: 'Les élèves déjà pointés ne sont pas modifiés. Vous pourrez encore corriger chaque élève ensuite.', bouton: 'Marquer présents' });
+    if (!ok) return;
+    bouton.disabled = true;
+    try {
+      const rep = await api('pointerRestantsPresents', pt.seance.id);
+      pt.eleves = rep.eleves;
+      $('#lignes').innerHTML = pt.eleves.map(htmlLigne).join('');
+      rafraichirZonesPointage();
+      toast(`${pluriel(rep.nb_pointes, 'élève marqué présent', 'élèves marqués présents')}.`, 'succes');
+    } catch (err) { bouton.disabled = false; gererErreur(err); }
+  }
+
+  async function cloturerAppel(bouton) {
+    if (!pt || pointagesEnCours.size) { toast('Un pointage est en cours : réessayez dans un instant.'); return; }
+    const n = pt.eleves.filter((e) => e.statut === 'absent' && !e.notif_statut).length;
+    const restants = pt.eleves.filter((e) => !e.statut).length;
+    const ok = await confirmer({
+      titre: n ? `Prévenir ${pluriel(n, 'parent', 'parents')} ?` : "Terminer l'appel ?",
+      message: (n ? `Un message WhatsApp d'absence va partir pour ${pluriel(n, 'élève', 'élèves')}. Un message envoyé ne peut pas être rappelé.` : 'Aucun message ne sera envoyé.')
+        + (restants ? ` Attention : ${pluriel(restants, "élève n'est pas encore pointé", 'élèves ne sont pas encore pointés')}.` : ''),
+      bouton: n ? 'Envoyer les messages' : "Terminer l'appel" });
+    if (!ok) return;
+    const b = $('[data-action="cloturer-appel"]');
+    if (b) { b.disabled = true; b.textContent = 'Envoi en cours…'; }
+    try {
+      const rep = await api('cloturerAppel', pt.seance.id);
+      pt.seance = rep.seance; pt.eleves = rep.eleves;
+      $('#lignes').innerHTML = pt.eleves.map(htmlLigne).join('');
+      rafraichirZonesPointage();
+      if (rep.echoues) toast(`${pluriel(rep.echoues, "message n'a pas pu être envoyé", "messages n'ont pas pu être envoyés")}. Voyez le détail sur chaque élève concerné.`, 'erreur', true);
+      else toast(rep.envoyes ? `Appel terminé. ${pluriel(rep.envoyes, 'parent prévenu', 'parents prévenus')}.` : 'Appel terminé.', 'succes');
+    } catch (err) { if (!gererErreur(err)) rafraichirZonesPointage(); }
   }
 
   async function enregistrerMotif(eleveId, motif) {
@@ -561,7 +652,8 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const parClasse = new Map();
     filtres.forEach((e) => parClasse.set(e.classe, [...(parClasse.get(e.classe) || []), e]));
     return [...parClasse].map(([classe, liste]) => `
-      <h2 class="titre-section">${esc(classe)} <span class="font-normal text-ardoise">(${liste.length})</span></h2>
+      <h2 class="titre-section flex flex-wrap items-center justify-between gap-2"><span>${esc(classe)} <span class="font-normal text-ardoise">(${liste.length})</span></span>
+        <button type="button" data-action="renommer-classe" data-classe="${esc(classe)}" class="text-sm font-normal text-ardoise underline">Renommer la classe</button></h2>
       <ul class="liste">${liste.map((e) => `
         <li class="px-4 py-3">
           <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
@@ -578,11 +670,15 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     return { html: `
       <div class="flex items-center justify-between gap-3">
         <h1 class="titre-page">Élèves</h1>
-        <button type="button" data-action="nouvel-eleve" class="btn btn-primaire">Ajouter un élève</button>
+        <span class="flex flex-wrap justify-end gap-2">
+          <button type="button" data-action="importer-eleves" class="btn btn-secondaire">Importer une liste</button>
+          <button type="button" data-action="nouvel-eleve" class="btn btn-primaire">Ajouter un élève</button>
+        </span>
       </div>
       <div class="mt-4"><label class="sr-only" for="recherche">Rechercher un élève</label>
         <input id="recherche" data-input="recherche" type="search" class="champ" placeholder="Rechercher par nom ou prénom" value="${esc(filtreElevesTexte)}"></div>
-      <div id="liste-eleves">${htmlListeEleves(listeElevesCourante)}</div>` };
+      <div id="liste-eleves">${htmlListeEleves(listeElevesCourante)}</div>
+      ${LIEN_CORBEILLE}` };
   }
 
   async function ouvrirFormEleve(id) {
@@ -607,6 +703,39 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div></form>`);
   }
 
+  function ouvrirFormClasse(classe) {
+    const autres = [...new Set(listeElevesCourante.map((e) => e.classe))].filter((c) => c !== classe);
+    ouvrirModale(`<form data-form="classe" data-classe="${esc(classe)}" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">Renommer la classe ${esc(classe)}</h2>
+      <p class="mt-2 text-sm text-ardoise">Le nouveau nom s'applique à tous ses élèves et à toutes ses séances. Si vous donnez le nom d'une classe qui existe déjà, les deux classes sont réunies en une seule.</p>
+      <div class="mt-4"><label class="etiquette" for="cl-nom">Nouveau nom</label>
+        <input class="champ" id="cl-nom" name="nouvelle" list="liste-classes-r" required maxlength="40" autocomplete="off" value="${esc(classe)}">
+        <datalist id="liste-classes-r">${autres.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
+      <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        <button type="submit" class="btn btn-primaire">Renommer</button>
+      </div></form>`);
+  }
+
+  function ouvrirFormImport(texte = '') {
+    ouvrirModale(`<form data-form="import" class="p-5" novalidate>
+      <h2 class="text-lg font-semibold">Importer une liste d'élèves</h2>
+      <p class="mt-2 text-sm text-ardoise">Une ligne par élève, avec cinq colonnes dans cet ordre : nom, prénom, classe, nom du parent, numéro WhatsApp du parent (avec l'indicatif, par exemple +225…).</p>
+      <div class="mt-4 space-y-3">
+        <div><label class="etiquette" for="imp-texte">Collez ici les lignes copiées depuis Excel ou Google Sheets</label>
+          <textarea class="champ font-mono text-sm" id="imp-texte" name="texte" rows="7" required style="padding-top:.5rem;padding-bottom:.5rem" placeholder="Bamba&#9;Issa&#9;3e A&#9;Mme Bamba&#9;+2250700000001">${esc(texte)}</textarea></div>
+        <div><label class="etiquette" for="imp-fichier">Ou choisissez un fichier CSV</label>
+          <input class="text-sm" id="imp-fichier" data-change="fichier-import" type="file" accept=".csv,.txt,text/csv,text/plain">
+          <p class="aide">Les élèves déjà enregistrés (même nom, prénom et classe) sont ignorés. Si une ligne est incorrecte, rien n'est importé.</p></div>
+      </div>
+      <div data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent" style="white-space:pre-line"></div>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        <button type="submit" class="btn btn-primaire">Vérifier la liste</button>
+      </div></form>`);
+  }
+
   async function vueHistorique(id) {
     const h = await api('historiqueEleve', id);
     const e = h.eleve;
@@ -625,6 +754,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     return { html: `
       <a href="#/eleves" class="text-sm text-ardoise underline">Retour aux élèves</a>
       <h1 class="titre-page mt-2">${esc(e.nom)} ${esc(e.prenom)}</h1>
+      ${e.supprime_le ? `<p class="mt-2 rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent">Cet élève est dans la corbeille : il n'apparaît plus à l'appel. <a href="#/corbeille" class="underline">Ouvrir la corbeille</a></p>` : ''}
       <p class="text-ardoise">Classe ${esc(e.classe)}. Parent : ${esc(e.parent_nom)}, ${esc(e.parent_whatsapp)}</p>
       <dl class="mt-4 grid grid-cols-3 divide-x divide-trait rounded-xl border border-trait bg-white text-center">
         ${stat(h.presences, 'Présences', 'text-present')}${stat(h.absences, 'Absences', h.absences ? 'text-absent' : '')}${stat(h.taux === null ? '–' : `${h.taux} %`, 'Taux de présence')}
@@ -674,7 +804,37 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
             <a href="${esc(lienWhatsApp(i.lien))}" target="_blank" rel="noopener" class="btn btn-secondaire btn-petit">WhatsApp</a>`
               : `<p class="w-full break-all text-xs text-ardoise">Ajoutez <strong>?invitation=${esc(i.id)}</strong> à la fin de l'adresse de l'application.</p>`}
             <button type="button" data-action="revoquer-invitation" data-id="${esc(i.id)}" class="btn btn-danger btn-petit">Annuler</button>
-          </div></li>`).join('')}</ul>` : ''}` };
+          </div></li>`).join('')}</ul>` : ''}
+      <p class="mt-6 text-sm"><a href="#/journal" class="text-ardoise underline">Journal des actions : qui a fait quoi, et quand</a></p>` };
+  }
+
+  // ── Écran : Journal des actions ───────────────────────────────────────
+  const LIBELLE_ACTION = {
+    connexion: 'Connexion',
+    'compte.creer': 'Compte créé', 'compte.modifier': 'Compte modifié', 'compte.supprimer': 'Compte supprimé', 'compte.mot_de_passe': 'Mot de passe changé',
+    'invitation.creer': 'Invitation créée', 'invitation.annuler': 'Invitation annulée', 'invitation.accepter': 'Invitation acceptée',
+    'eleve.creer': 'Élève ajouté', 'eleve.modifier': 'Élève modifié', 'eleve.importer': "Import d'élèves",
+    'eleve.corbeille': 'Élève mis à la corbeille', 'eleve.retablir': 'Élève rétabli', 'eleve.effacer': 'Élève supprimé définitivement',
+    'seance.creer': 'Séance créée', 'seance.modifier': 'Séance modifiée', 'seance.cloturer': 'Appel terminé',
+    'classe.renommer': 'Classe renommée', 'classe.fusionner': 'Classes réunies',
+    'seance.corbeille': 'Séance mise à la corbeille', 'seance.retablir': 'Séance rétablie', 'seance.effacer': 'Séance supprimée définitivement',
+  };
+  async function vueJournal() {
+    const lignes = await api('listerJournal');
+    const liste = lignes.length
+      ? `<ul class="liste mt-4">${lignes.map((l) => `<li class="px-4 py-3">
+          <div class="flex items-baseline justify-between gap-3">
+            <p class="font-medium">${esc(LIBELLE_ACTION[l.action] || l.action)}</p>
+            <p class="shrink-0 text-xs text-ardoise">${esc(fmtHorodatage(l.horodatage))}</p>
+          </div>
+          <p class="text-sm">${esc(l.cible)}${l.detail ? ` <span class="text-ardoise">(${esc(l.detail)})</span>` : ''}</p>
+          <p class="text-xs text-ardoise">Par ${esc(l.utilisateur_nom || 'inconnu')}</p></li>`).join('')}</ul>`
+      : `<div class="mt-4">${carteVide('Journal vide', 'Les connexions et les modifications apparaîtront ici.')}</div>`;
+    return { html: `
+      <a href="#/enseignants" class="text-sm text-ardoise underline">Retour aux encadreurs</a>
+      <h1 class="titre-page mt-2">Journal des actions</h1>
+      <p class="text-ardoise">Les 200 dernières actions. Le journal complet se trouve dans la feuille « Journal » du classeur. Les pointages n'y figurent pas : leur heure et leur auteur sont sur chaque feuille de présence.</p>
+      ${liste}` };
   }
 
   function genererMotDePasse() {
@@ -711,7 +871,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const texte = `Application : ${urlApp || location.href}\nIdentifiant : ${email}\nMot de passe : ${mdp}`;
     ouvrirModale(`<div class="p-5">
       <h2 class="text-lg font-semibold">${esc(titre)}</h2>
-      <p class="mt-2 text-sm text-ardoise">Transmettez ces identifiants à ${esc(nom)}. Le mot de passe ne pourra plus être affiché ensuite.</p>
+      <p class="mt-2 text-sm text-ardoise">Transmettez ces identifiants à ${esc(nom)}. Le mot de passe ne pourra plus être affiché ensuite, et il devra être remplacé à la première connexion.</p>
       <dl class="mt-4 space-y-2 rounded-lg bg-papier p-3 text-sm">
         <div><dt class="text-ardoise">Adresse de l'application</dt><dd class="break-all font-medium">${esc(urlApp || location.href)}</dd></div>
         <div><dt class="text-ardoise">Identifiant</dt><dd class="break-all font-medium">${esc(email)}</dd></div>
@@ -724,9 +884,12 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   }
   const lienWhatsApp = (lien) => 'https://wa.me/?text=' + encodeURIComponent(`Bonjour, voici votre lien pour créer votre compte Excellence Group (valable 7 jours, un seul usage) : ${lien}`);
 
-  function ouvrirFormMdp() {
+  // obligatoire = vrai : le mot de passe a été choisi par l'administrateur. La fenêtre ne se ferme
+  // alors qu'en changeant le mot de passe ou en se déconnectant (le serveur refuse tout le reste).
+  function ouvrirFormMdp(obligatoire = false) {
     ouvrirModale(`<form data-form="mdp" class="p-5" novalidate>
-      <h2 class="text-lg font-semibold">Changer mon mot de passe</h2>
+      <h2 class="text-lg font-semibold">${obligatoire ? 'Choisissez votre mot de passe' : 'Changer mon mot de passe'}</h2>
+      ${obligatoire ? `<p class="mt-2 text-sm text-ardoise">Votre mot de passe actuel a été choisi par l'administrateur. Remplacez-le par un mot de passe que vous êtes seul à connaître pour continuer.</p>` : ''}
       <div class="mt-4 space-y-3">
         <div><label class="etiquette" for="m-ancien">Mot de passe actuel</label>
           <input class="champ" id="m-ancien" name="ancien" type="password" autocomplete="current-password" required></div>
@@ -738,9 +901,14 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div>
       <p data-erreur role="alert" class="mt-3 hidden rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent"></p>
       <div class="mt-5 flex justify-end gap-2">
-        <button type="button" data-fermer class="btn btn-secondaire">Annuler</button>
+        ${obligatoire ? '<button type="button" data-action="deconnexion" class="btn btn-secondaire">Se déconnecter</button>'
+          : '<button type="button" data-fermer class="btn btn-secondaire">Annuler</button>'}
         <button type="submit" class="btn btn-primaire">Enregistrer</button>
       </div></form>`);
+    if (obligatoire) {
+      modale.onclick = null; // un clic à côté ne ferme pas la fenêtre
+      modale.oncancel = (e) => e.preventDefault(); // la touche Échap non plus
+    }
   }
   function ouvrirFormInvitation() {
     ouvrirModale(`<form data-form="invitation" class="p-5" novalidate>
@@ -789,11 +957,42 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div></form>`);
   }
 
+  // ── Écran : Corbeille (élèves et séances retirés, rétablissables) ─────
+  const LIEN_CORBEILLE = '<p class="mt-6 text-sm"><a href="#/corbeille" class="text-ardoise underline">Corbeille : élèves et séances supprimés</a></p>';
+  async function vueCorbeille() {
+    const c = await api('listerCorbeille');
+    const boutons = (type, id) => `<div class="mt-2 flex flex-wrap gap-2">
+        <button type="button" data-action="restaurer-${type}" data-id="${esc(id)}" class="btn btn-secondaire btn-petit">Rétablir</button>
+        <button type="button" data-action="effacer-${type}" data-id="${esc(id)}" class="btn btn-danger btn-petit">Supprimer définitivement</button>
+      </div>`;
+    const quand = (o) => `Supprimé le ${esc(fmtHorodatage(o.supprime_le))}, ${pluriel(o.nb_pointages, 'pointage conservé', 'pointages conservés')}`;
+    const eleves = c.eleves.length
+      ? `<ul class="liste">${c.eleves.map((e) => `<li class="px-4 py-3">
+          <p class="font-medium">${esc(e.nom)} ${esc(e.prenom)}</p>
+          <p class="text-sm text-ardoise">Classe ${esc(e.classe)}</p>
+          <p class="text-xs text-ardoise">${quand(e)}</p>
+          ${boutons('eleve', e.id)}</li>`).join('')}</ul>`
+      : carteVide('Aucun élève dans la corbeille', 'Un élève supprimé arrive ici, avec tout son historique.');
+    const seances = c.seances.length
+      ? `<ul class="liste">${c.seances.map((s) => `<li class="px-4 py-3">
+          <p class="font-medium">${esc(s.matiere)}</p>
+          <p class="text-sm text-ardoise">Classe ${esc(s.classe)}, ${esc(fmtDateCourte(s.date_seance))} à ${esc(s.heure_debut)}</p>
+          <p class="text-xs text-ardoise">${quand(s)}</p>
+          ${boutons('seance', s.id)}</li>`).join('')}</ul>`
+      : carteVide('Aucune séance dans la corbeille', 'Une séance supprimée arrive ici, avec ses pointages.');
+    return { html: `
+      <a href="#/eleves" class="text-sm text-ardoise underline">Retour aux élèves</a>
+      <h1 class="titre-page mt-2">Corbeille</h1>
+      <p class="text-ardoise">Ce qui est ici n'apparaît plus dans l'application, mais rien n'est perdu : vous pouvez le rétablir. « Supprimer définitivement » efface aussi les pointages et ne peut pas être annulé.</p>
+      <h2 class="titre-section">Élèves</h2>${eleves}
+      <h2 class="titre-section">Séances</h2>${seances}` };
+  }
+
   // ── Écran : Messages ──────────────────────────────────────────────────
   const STATUTS_MSG = { envoye: ['Envoyé', 'bg-present-pale text-present'], echoue: ['Échoué', 'bg-absent-pale text-absent'], en_attente: ['En cours', 'bg-attente-pale text-attente'] };
   async function vueMessages(requete = '') {
     const statut = new URLSearchParams(requete).get('statut') || '';
-    const lignes = await api('listerNotifications', statut || null);
+    const lignes = await api('listerNotifications', statut || null, limites.messages);
     const onglet = (v, l) => `<a href="#/messages${v ? `?statut=${v}` : ''}" ${statut === v ? 'aria-current="true"' : ''} class="btn btn-petit ${statut === v ? 'btn-primaire' : 'btn-secondaire'}">${l}</a>`;
     const liste = lignes.length
       ? `<ul class="liste">${lignes.map((n) => { const [libelle, style] = STATUTS_MSG[n.statut] || [n.statut, 'bg-papier text-ardoise']; return `<li class="px-4 py-3">
@@ -805,14 +1004,15 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
           </div>
           ${n.erreur ? `<p class="mt-2 rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent">${esc(n.erreur)}</p>` : ''}
           <p class="mt-1 text-xs text-ardoise">Mis à jour le ${esc(fmtHorodatage(n.maj_le))}, ${pluriel(n.tentatives, 'tentative', 'tentatives')}</p>
-          ${n.statut === 'echoue' ? `<button type="button" data-action="renvoyer" data-notif="${esc(n.id)}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
+          ${n.statut === 'echoue' || n.bloque ? `<button type="button" data-action="renvoyer" data-notif="${esc(n.id)}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
         </li>`; }).join('')}</ul>`
       : carteVide('Aucun message', statut ? 'Aucun message dans cette catégorie.' : "Les messages envoyés aux parents apparaîtront ici dès la première absence.");
     return { html: `
       <h1 class="titre-page">Messages aux parents</h1>
       <p class="text-ardoise">Journal des notifications WhatsApp d'absence.</p>
       <div class="mb-4 mt-4 flex flex-wrap gap-2">${onglet('', 'Tous')}${onglet('echoue', 'Échoués')}${onglet('envoye', 'Envoyés')}${onglet('en_attente', 'En cours')}</div>
-      ${liste}` };
+      ${liste}
+      ${boutonPlusAnciennes('messages', lignes.length)}` };
   }
 
   // ── Événements globaux ────────────────────────────────────────────────
@@ -859,14 +1059,30 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       } catch (e) { gererErreur(e); }
     },
     'supprimer-eleve': async (el) => {
-      const ok = await confirmer({ titre: 'Supprimer cet élève ?', message: 'Ses présences et les messages associés seront aussi supprimés. Cette action est définitive.', bouton: "Supprimer l'élève", danger: true });
+      const ok = await confirmer({ titre: 'Supprimer cet élève ?', message: "Il n'apparaîtra plus dans les listes ni à l'appel. Son historique est conservé : vous pourrez le rétablir depuis la corbeille.", bouton: "Supprimer l'élève", danger: true });
       if (!ok) return;
-      try { await api('supprimerEleve', el.dataset.id); toast('Élève supprimé.', 'succes'); router(); } catch (e) { gererErreur(e); }
+      try { await api('supprimerEleve', el.dataset.id); toast('Élève placé dans la corbeille.', 'succes'); router(); } catch (e) { gererErreur(e); }
     },
     'supprimer-seance': async (el) => {
-      const ok = await confirmer({ titre: 'Supprimer cette séance ?', message: 'Tous les pointages de la séance seront supprimés. Cette action est définitive.', bouton: 'Supprimer la séance', danger: true });
+      const ok = await confirmer({ titre: 'Supprimer cette séance ?', message: 'Elle disparaîtra des listes et ses pointages ne compteront plus. Vous pourrez la rétablir depuis la corbeille.', bouton: 'Supprimer la séance', danger: true });
       if (!ok) return;
-      try { await api('supprimerSeance', el.dataset.id); toast('Séance supprimée.', 'succes'); location.hash = '#/seances'; } catch (e) { gererErreur(e); }
+      try { await api('supprimerSeance', el.dataset.id); toast('Séance placée dans la corbeille.', 'succes'); location.hash = '#/seances'; } catch (e) { gererErreur(e); }
+    },
+    'restaurer-eleve': async (el) => {
+      try { await api('restaurerEleve', el.dataset.id); toast('Élève rétabli.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'restaurer-seance': async (el) => {
+      try { await api('restaurerSeance', el.dataset.id); toast('Séance rétablie.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'effacer-eleve': async (el) => {
+      const ok = await confirmer({ titre: 'Supprimer définitivement cet élève ?', message: 'Ses pointages et les messages associés seront effacés. Cette action ne peut pas être annulée.', bouton: 'Supprimer définitivement', danger: true });
+      if (!ok) return;
+      try { await api('supprimerEleveDefinitivement', el.dataset.id); toast('Élève supprimé définitivement.', 'succes'); router(); } catch (e) { gererErreur(e); }
+    },
+    'effacer-seance': async (el) => {
+      const ok = await confirmer({ titre: 'Supprimer définitivement cette séance ?', message: 'Tous ses pointages et les messages associés seront effacés. Cette action ne peut pas être annulée.', bouton: 'Supprimer définitivement', danger: true });
+      if (!ok) return;
+      try { await api('supprimerSeanceDefinitivement', el.dataset.id); toast('Séance supprimée définitivement.', 'succes'); router(); } catch (e) { gererErreur(e); }
     },
     'supprimer-utilisateur': async (el) => {
       const c = comptes.find((x) => x.id === el.dataset.id);
@@ -878,6 +1094,12 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
         toast('Compte supprimé.', 'succes'); router();
       } catch (e) { gererErreur(e); }
     },
+    'modifier-seance': () => { if (pt) ouvrirFormSeance(pt.seance).catch((e) => toast(e.message, 'erreur')); },
+    'importer-eleves': () => ouvrirFormImport(),
+    'renommer-classe': (el) => ouvrirFormClasse(el.dataset.classe),
+    'plus-anciennes': (el) => { limites[el.dataset.liste] += PAS_LISTE; router(); },
+    'pointer-restants': (el) => pointerRestants(el),
+    'cloturer-appel': (el) => cloturerAppel(el),
     pointer: (el) => pointer(el.dataset.eleve, el.dataset.statut),
     renvoyer: (el) => renvoyer(el.dataset.notif),
   };
@@ -889,6 +1111,13 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     const el = e.target;
     if (el.dataset.motif) enregistrerMotif(el.dataset.motif, el.value);
     if (el.dataset.change === 'periode') { periodeJours = el.value; router(); }
+    if (el.dataset.change === 'fichier-import' && el.files[0]) {
+      if (el.files[0].size > 200000) { toast('Fichier trop volumineux : importez la liste en plusieurs fois.', 'erreur'); el.value = ''; return; }
+      const lecteur = new FileReader();
+      lecteur.onload = () => { const zone = $('#imp-texte'); if (zone) zone.value = String(lecteur.result); };
+      lecteur.onerror = () => toast('Lecture du fichier impossible.', 'erreur');
+      lecteur.readAsText(el.files[0]); // UTF-8 : un fichier enregistré dans un autre encodage aura des accents abîmés, visibles dans la zone de texte
+    }
   });
   document.addEventListener('input', (e) => {
     if (e.target.dataset.input !== 'recherche') return;
@@ -904,9 +1133,36 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       else await api('creerEleve', donnees);
       modale.close(); toast(id ? 'Modifications enregistrées.' : 'Élève ajouté.', 'succes'); router();
     },
-    async seance(donnees) {
+    async seance(donnees, form) {
+      const id = form.dataset.id;
+      if (id) { await api('modifierSeance', id, donnees); modale.close(); toast('Séance modifiée.', 'succes'); router(); return; }
       const s = await api('creerSeance', donnees);
       modale.close(); location.hash = `#/seances/${esc(s.id)}`;
+    },
+    async classe(donnees, form) {
+      const rep = await api('renommerClasse', form.dataset.classe, donnees.nouvelle);
+      modale.close();
+      toast(`${rep.fusion ? 'Classes réunies sous le nom' : 'Classe renommée en'} ${rep.classe} : ${pluriel(rep.eleves, 'élève', 'élèves')}, ${pluriel(rep.seances, 'séance', 'séances')}.`, 'succes');
+      router();
+    },
+    // Deux temps : une vérification sans rien écrire, puis l'import après confirmation du bilan.
+    async import(donnees) {
+      const texte = donnees.texte;
+      const bilan = await api('importerEleves', texte, true);
+      if (!bilan.ok) {
+        const lignes = bilan.erreurs.map((x) => `Ligne ${x.ligne} : ${x.message}`);
+        if (bilan.nb_erreurs > bilan.erreurs.length) lignes.push(`… et ${bilan.nb_erreurs - bilan.erreurs.length} autres lignes incorrectes.`);
+        throw new Error(`Rien n'a été importé. Corrigez ces lignes puis recommencez.\n${lignes.join('\n')}`);
+      }
+      if (!bilan.ajoutes) throw new Error('Tous les élèves de cette liste sont déjà enregistrés.');
+      const detail = bilan.classes.map((c) => `${c.classe} : ${c.nb}`).join(', ');
+      const ok = await confirmer({ titre: `Importer ${pluriel(bilan.ajoutes, 'élève', 'élèves')} ?`,
+        message: `Par classe : ${detail}.${bilan.ignores ? ` ${pluriel(bilan.ignores, 'élève déjà enregistré sera ignoré', 'élèves déjà enregistrés seront ignorés')}.` : ''}`, bouton: 'Importer' });
+      if (!ok) { ouvrirFormImport(texte); return; }
+      try {
+        const rep = await api('importerEleves', texte, false);
+        toast(`${pluriel(rep.ajoutes, 'élève importé', 'élèves importés')}.`, 'succes'); router();
+      } catch (err) { if (!gererErreur(err)) ouvrirFormImport(texte); }
     },
     async utilisateur(donnees, form) {
       const id = form.dataset.id;
@@ -920,7 +1176,10 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     async mdp(donnees) {
       if (donnees.nouveau !== donnees.confirmation) throw new Error('Les deux mots de passe ne sont pas identiques.');
       await api('changerMonMotDePasse', donnees.ancien, donnees.nouveau);
+      const etaitObligatoire = utilisateur && utilisateur.mdp_a_changer;
+      if (utilisateur) utilisateur.mdp_a_changer = false;
       modale.close(); toast('Mot de passe modifié.', 'succes');
+      if (etaitObligatoire) router();
     },
     async invitation(donnees) {
       const inv = await api('creerInvitation', { nom: donnees.nom, role: donnees.role });
@@ -953,6 +1212,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   // ── Connexion / démarrage ─────────────────────────────────────────────
   function afficherConnexion(message) {
     jeton = ''; stockage.removeItem('sp_jeton'); utilisateur = null;
+    if (modale.open) modale.close();
     $('#app').classList.add('hidden');
     $('#ecran-invitation').classList.add('hidden');
     $('#ecran-connexion').classList.remove('hidden');
@@ -974,6 +1234,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     appel('urlApplication').then((u) => { urlApp = u; }).catch(() => {});
     $('#nom-utilisateur').textContent = utilisateur.nom;
     appliquerRole();
+    if (utilisateur.mdp_a_changer) { vue.innerHTML = ''; ouvrirFormMdp(true); return; }
     router();
   }
 
@@ -986,7 +1247,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     try {
       const rep = await appel('connexion', $('#c-email').value, $('#c-mdp').value);
       jeton = rep.jeton; stockage.setItem('sp_jeton', jeton);
-      utilisateur = { id: rep.id, nom: rep.nom, email: rep.email, role: rep.role };
+      utilisateur = { id: rep.id, nom: rep.nom, email: rep.email, role: rep.role, mdp_a_changer: rep.mdp_a_changer };
       afficherApp();
     } catch (e2) {
       err.textContent = e2.message; err.classList.remove('hidden');
