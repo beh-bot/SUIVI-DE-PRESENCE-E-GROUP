@@ -30,7 +30,7 @@ git pull
 npm test
 ```
 
-- [ ] **A1.** La dernière ligne affichée est `32 tests réussis.` et le mot `ÉCHEC` n'apparaît nulle part.
+- [ ] **A1.** La dernière ligne affichée est `34 tests réussis.` et le mot `ÉCHEC` n'apparaît nulle part.
 - [ ] **A2.** Sur GitHub, onglet **Actions** du dépôt : la dernière exécution de `develop` a une coche verte.
 
 Si A1 échoue, inutile d'aller plus loin : transmettez l'affichage complet.
@@ -157,15 +157,18 @@ L'import est refusé, et le message désigne la ligne 3. Aucun élève n'est ajo
 
 - [ ] **G1.** « Créer une séance » pour la classe `6e Bleue`, attribuée à un encadreur, à la date du jour.
 - [ ] **G2.** Ouvrez la séance, « Modifier la séance » : changez l'heure et la matière. La page affiche les nouvelles valeurs.
-- [ ] **G3.** Marquez un élève « Absent ». La ligne indique « Message envoyé » (simulation). Notez la durée du clic : ______ secondes.
+- [ ] **G3.** Marquez un élève « Absent ». La ligne indique « Le parent sera prévenu quand vous terminerez l'appel ». Notez la durée du clic : ______ secondes. Page Messages : aucun message n'est encore apparu.
 - [ ] **G4.** Saisissez un motif pour cet absent. Rechargez la page : l'heure « Pointé à » n'a pas changé.
 - [ ] **G5.** Cliquez « Marquer les 2 autres élèves présents » et confirmez. Les deux autres passent à « Présent », l'absent reste absent, et le bouton disparaît.
+- [ ] **G5 bis.** Un encadré indique « 1 parent n'a pas encore été prévenu ». Revenez à la page Séances : la séance porte la mention « 1 parent à prévenir ». Sur l'Accueil, un bandeau signale une séance avec des absences non signalées.
+- [ ] **G5 ter.** Dans la séance, cliquez « Terminer l'appel et prévenir 1 parent ». Une confirmation rappelle qu'un message envoyé ne peut pas être rappelé. Confirmez : la ligne de l'absent indique « Message envoyé », et la page affiche « Appel terminé le … ».
+- [ ] **G5 quater.** Marquez un présent « Absent » après coup : rien ne part, et un bouton « Prévenir 1 parent » apparaît. Cliquez-le : un seul nouveau message part, le premier n'est pas renvoyé.
 - [ ] **G6.** « Modifier la séance » et changez la classe : c'est refusé, avec un message expliquant que l'appel a commencé.
 - [ ] **G7.** « Exporter en PDF » : un vrai fichier PDF se télécharge, lisible, avec les trois élèves, leurs statuts et les heures.
 - [ ] **G8.** « Exporter en CSV » : le fichier s'ouvre dans un tableur, accents corrects.
 - [ ] **G9.** Connecté en encadreur, une séance attribuée à quelqu'un d'autre n'apparaît pas. Si vous tapez son adresse à la main, l'accès est refusé.
 - [ ] **G10.** Page Accueil : les taux de présence et l'élève le plus absent correspondent à ce que vous venez de saisir.
-- [ ] **G11.** Page Messages : le message de G3 figure dans l'onglet « Envoyés ».
+- [ ] **G11.** Page Messages : les deux messages de G5 figurent dans l'onglet « Envoyés », un par élève.
 - [ ] **G12.** Dans la feuille `Seances`, la date et l'heure sont restées du texte (`2026-11-16`, `08:30`) et n'ont pas été transformées.
 
 ## Partie H – Deux personnes en même temps (15 minutes)
@@ -216,7 +219,8 @@ Cette partie vérifie que la production pourra être mise à jour sans perte. El
 - [ ] **K1.** Un compte existant se connecte avec son mot de passe habituel.
 - [ ] **K2.** Après cette connexion, sa colonne `mdp_hash` commence par `pbkdf2$`.
 - [ ] **K3.** Les élèves, les séances et les anciens pointages s'affichent comme avant.
-- [ ] **K4.** Les feuilles `Eleves` et `Seances` ont reçu une colonne `supprime_le`, et `Utilisateurs` une colonne `mdp_a_changer`, toutes vides.
+- [ ] **K4.** Les feuilles `Eleves` et `Seances` ont reçu une colonne `supprime_le`, `Seances` une colonne `cloture_le`, et `Utilisateurs` une colonne `mdp_a_changer`, toutes vides.
+- [ ] **K4 bis.** Aucune ancienne séance ne porte la mention « parents à prévenir » : les absences déjà signalées avant la mise à jour ne sont pas renvoyées.
 - [ ] **K5.** Une feuille `Journal` existe et se remplit.
 - [ ] **K6.** Aucun compte existant n'est forcé de changer son mot de passe.
 

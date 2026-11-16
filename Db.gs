@@ -7,7 +7,7 @@ const FEUILLES = {
   UTILISATEURS: { nom: 'Utilisateurs', entetes: ['id', 'nom', 'email', 'mdp_hash', 'mdp_sel', 'role', 'actif', 'cree_le', 'mdp_a_changer'] }, // mdp_a_changer : 'oui' tant que le mot de passe choisi par l'administrateur n'a pas été remplacé par son titulaire
   // supprime_le : vide = actif ; une date = placé dans la corbeille à ce moment (voir actifs_ et la corbeille dans Api.gs).
   ELEVES: { nom: 'Eleves', entetes: ['id', 'nom', 'prenom', 'classe', 'parent_nom', 'parent_whatsapp', 'cree_le', 'supprime_le'] },
-  SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le', 'supprime_le'] },
+  SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le', 'supprime_le', 'cloture_le'] }, // cloture_le : date à laquelle l'appel a été terminé (vide = appel en cours)
   PRESENCES: { nom: 'Presences', entetes: ['id', 'seance_id', 'eleve_id', 'statut', 'motif', 'horodatage', 'pointe_par'] },
   INVITATIONS: { nom: 'Invitations', entetes: ['id', 'role', 'nom_suggere', 'expire_le', 'utilise_le', 'cree_par', 'cree_le'] },
   // Journal des actions : qui a fait quoi et quand. On y ajoute des lignes, on n'en modifie jamais (voir journaliser_).

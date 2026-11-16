@@ -8,7 +8,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 
 - **Administrateur** : gère les élèves, les séances, les comptes, consulte le tableau de bord, exporte en CSV et PDF.
 - **Encadreur** : voit uniquement ses séances et y pointe « Présent » ou « Absent ».
-- **WhatsApp** : un message par absence (API WhatsApp Business Cloud de Meta), journal des envois, renvoi des échecs.
+- **WhatsApp** : pendant l'appel, rien n'est envoyé. Quand l'encadreur termine l'appel, un message part pour chaque absent (API WhatsApp Business Cloud de Meta). Journal des envois, renvoi des échecs.
 - **Comptes** : créés par l'administrateur, ou par lien d'invitation à usage unique valable 7 jours.
 - **Corbeille** : un élève ou une séance supprimés gardent leur historique et peuvent être rétablis.
 - **Sauvegarde** : copie des données dans un autre classeur, à la demande ou chaque nuit sur sept jours.
@@ -89,7 +89,7 @@ Ouvre l'application sur http://localhost:8765 avec des données de démonstratio
 - Chaque requête relit les feuilles concernées en entier : l'application convient à un centre, pas à des dizaines de milliers de pointages.
 - Les listes de séances et de messages affichent 200 lignes, puis 200 de plus à la demande, jusqu'à 2 000.
 - Les sauvegardes sont sur le même compte Google que le classeur : elles protègent d'une erreur, pas de la perte du compte.
-- Un « Absent » envoie le message tout de suite ; un pointage fait par erreur ne peut pas être rattrapé auprès du parent.
+- Les parents ne sont prévenus que lorsque l'appel est terminé : un appel laissé ouvert n'envoie rien. Un rappel reste affiché tant qu'il reste des absences non signalées.
 - « Envoyé » signifie accepté par Meta, pas remis au parent.
 - Toute personne ayant accès au classeur voit toutes les données : ne le partager qu'avec l'administrateur.
 - Le manifeste `appsscript.json` du dépôt a été déduit du code : il faut le comparer à celui de la production avant le premier `clasp push` vers elle.

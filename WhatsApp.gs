@@ -105,21 +105,15 @@ function envoyerMessageAbsence_(params) {
   return { messageId: id };
 }
 
-/**
- * Crée l'entrée de journal si elle n'existe pas (une seule fois par séance+élève,
- * même si l'élève est repointé plusieurs fois), puis tente l'envoi.
- */
-function declencherNotificationAbsence_(seance, eleve) {
-  const entree = avecVerrou_(() => {
-    const trouvee = versObjets_(FEUILLES.NOTIFICATIONS).find((n) => n.seance_id === seance.id && n.eleve_id === eleve.id);
-    if (trouvee) return trouvee;
-    return inserer_(FEUILLES.NOTIFICATIONS, {
-      seance_id: seance.id, eleve_id: eleve.id, telephone: eleve.parent_whatsapp,
-      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: nowIso_(),
-    });
-  });
-  if (entree.statut !== 'en_attente') return; // déjà envoyé, ou déjà marqué échoué (voir bouton « Renvoyer »)
-  tenterEnvoi_(entree.id, seance, eleve);
+// Les messages partent quand l'encadreur termine l'appel : voir cloturerAppel dans Api.gs, qui crée
+// une ligne par message (une seule par séance et par élève) puis appelle tenterEnvoi_.
+
+// Un message resté « en cours » plus longtemps que ce délai n'est plus en train de partir : l'exécution
+// qui devait l'envoyer s'est interrompue. On autorise alors à le renvoyer.
+const DELAI_ENVOI_BLOQUE_MS = 10 * 60 * 1000;
+
+function envoiBloque_(n) {
+  return n.statut === 'en_attente' && Date.now() - new Date(n.maj_le).getTime() > DELAI_ENVOI_BLOQUE_MS;
 }
 
 function tenterEnvoi_(notifId, seance, eleve) {
@@ -154,6 +148,7 @@ function listerNotifications(jeton, statut, limite) {
       const s = seances.find((x) => x.id === n.seance_id);
       const e = eleves.find((x) => x.id === n.eleve_id);
       return Object.assign(sansLigne_(n), {
+        bloque: envoiBloque_(n), // resté « en cours » trop longtemps : l'écran propose de le renvoyer
         matiere: s.matiere, date_seance: s.date_seance, heure_debut: s.heure_debut, classe: s.classe,
         nom: e.nom, prenom: e.prenom, parent_nom: e.parent_nom,
       });
@@ -176,8 +171,8 @@ function renvoyerNotification(jeton, notifId) {
   // Vérification du statut et passage à « en_attente » sous verrou : un double clic n'envoie qu'un message.
   avecVerrou_(() => {
     const actuelle = trouverParId_(FEUILLES.NOTIFICATIONS, notifId);
-    if (!actuelle || actuelle.statut !== 'echoue') throw new Error('Seul un message échoué peut être renvoyé.');
-    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente' });
+    if (!actuelle || (actuelle.statut !== 'echoue' && !envoiBloque_(actuelle))) throw new Error('Seul un message échoué peut être renvoyé.');
+    mettreAJour_(FEUILLES.NOTIFICATIONS, notifId, { statut: 'en_attente', maj_le: nowIso_() });
   });
   tenterEnvoi_(notifId, seance, eleve);
   return sansLigne_(trouverParId_(FEUILLES.NOTIFICATIONS, notifId));

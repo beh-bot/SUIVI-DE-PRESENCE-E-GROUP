@@ -331,6 +331,11 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
            <strong>${esc(pluriel(d.notificationsEchouees, "message WhatsApp n'a pas pu être envoyé", "messages WhatsApp n'ont pas pu être envoyés"))}.</strong>
            <span class="underline">Voir et renvoyer</span></a>`
       : '';
+    const aPrevenir = d.seancesAPrevenir
+      ? `<a href="#/seances" class="mt-4 block rounded-xl bg-attente-pale px-4 py-3 text-sm text-attente">
+           <strong>${esc(pluriel(d.seancesAPrevenir, 'séance a des absences non signalées aux parents', 'séances ont des absences non signalées aux parents'))}.</strong>
+           Ouvrez-les et terminez l'appel pour envoyer les messages. <span class="underline">Voir les séances</span></a>`
+      : '';
     const jour = d.seancesDuJour.length
       ? `<ul class="liste">${d.seancesDuJour.map(ligneSeance).join('')}</ul>`
       : carteVide("Aucune séance aujourd'hui", d.nbEleves ? 'Créez une séance pour faire l’appel de votre classe.' : "Commencez par ajouter vos élèves, puis créez une séance.",
@@ -361,6 +366,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <h1 class="titre-page">Tableau de bord</h1>
       <p class="text-ardoise">${esc(fmtDateLongue(d.aujourdhui))}</p>
       ${alerte}
+      ${aPrevenir}
       <h2 class="titre-section">Séances du jour</h2>
       ${jour}
       <div class="mb-2 mt-7 flex items-end justify-between gap-3">
@@ -386,6 +392,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
           ${s.presents ? `<span class="puce bg-present-pale text-present">${pluriel(s.presents, 'présent', 'présents')}</span>` : ''}
           ${s.absents ? `<span class="puce bg-absent-pale text-absent">${pluriel(s.absents, 'absent', 'absents')}</span>` : ''}
           ${restants ? `<span class="puce bg-papier text-ardoise">${restants} à pointer</span>` : ''}
+          ${s.a_prevenir ? `<span class="puce bg-attente-pale text-attente">${pluriel(s.a_prevenir, 'parent à prévenir', 'parents à prévenir')}</span>` : ''}
         </div></div></a></li>`;
   }
 
@@ -462,6 +469,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
   function htmlNotif(e) {
     if (e.notif_statut === 'envoye') return `<span class="text-present">Message envoyé à ${esc(e.parent_nom)}.</span>`;
     if (e.notif_statut === 'en_attente') return `<span class="text-attente">Envoi du message au parent en cours…</span>`;
+    if (!e.notif_statut && e.statut === 'absent') return `<span class="text-attente">Le parent sera prévenu quand vous terminerez l'appel.</span>`;
     if (e.notif_statut === 'echoue') return `<span class="text-absent">Message non envoyé : ${esc(e.notif_erreur)}</span>
         <button type="button" data-action="renvoyer" data-notif="${esc(e.notif_id)}" class="btn btn-danger btn-petit mt-2 block">Renvoyer le message</button>`;
     return '';
@@ -494,6 +502,20 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <span class="puce bg-absent-pale text-absent">${pluriel(absents, 'absent', 'absents')}</span>
       <span class="puce bg-white text-ardoise">${restants} à pointer</span>`;
   }
+  // Fin de l'appel : c'est ce bouton, et lui seul, qui envoie les messages aux parents.
+  function htmlCloture(seance, eleves) {
+    if (!eleves.length) return '';
+    const n = eleves.filter((e) => e.statut === 'absent' && !e.notif_statut).length;
+    if (n) {
+      return `<div class="rounded-xl bg-attente-pale p-4">
+        <p class="text-sm text-attente"><strong>${pluriel(n, 'parent n\'a pas encore été prévenu', 'parents n\'ont pas encore été prévenus')}.</strong>
+          Relisez la liste, puis terminez l'appel pour envoyer les messages WhatsApp.</p>
+        <button type="button" data-action="cloturer-appel" class="btn btn-primaire mt-3 w-full">${seance.cloture_le ? '' : "Terminer l'appel et "}${seance.cloture_le ? 'Prévenir' : 'prévenir'} ${pluriel(n, 'parent', 'parents')}</button></div>`;
+    }
+    if (seance.cloture_le) return `<p class="text-sm text-ardoise">Appel terminé le ${esc(fmtHorodatage(seance.cloture_le))}. Les parents des absents ont été prévenus.</p>`;
+    return `<button type="button" data-action="cloturer-appel" class="btn btn-secondaire w-full">Terminer l'appel</button>
+      <p class="aide">Aucun parent à prévenir pour le moment.</p>`;
+  }
   // Bouton « les autres sont présents » : n'apparaît que s'il reste des élèves à pointer.
   function htmlRestants(eleves) {
     const restants = eleves.filter((e) => !e.statut).length;
@@ -518,6 +540,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       <div id="resume" class="sticky top-0 z-10 -mx-4 mb-3 mt-4 flex flex-wrap gap-2 bg-papier/95 px-4 py-2 backdrop-blur md:-mx-8 md:px-8">${htmlResume(donnees.eleves)}</div>
       ${corps}
       <div id="zone-restants" class="mt-3">${htmlRestants(donnees.eleves)}</div>
+      <div id="zone-cloture" class="mt-3">${htmlCloture(s, donnees.eleves)}</div>
       <h2 class="titre-section">${estAdmin() ? 'Exporter et gérer' : 'Exporter'}</h2>
       <div class="flex flex-wrap gap-2">
         <button type="button" data-action="exporter-pdf-seance" data-id="${esc(s.id)}" class="btn btn-primaire">Exporter en PDF</button>
@@ -527,11 +550,17 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       </div>` };
   }
 
+  function rafraichirZonesPointage() {
+    $('#resume').innerHTML = htmlResume(pt.eleves);
+    $('#zone-restants').innerHTML = htmlRestants(pt.eleves);
+    $('#zone-cloture').innerHTML = htmlCloture(pt.seance, pt.eleves);
+  }
+
   function remplacerLigne(e, focusStatut) {
     const li = $(`#ligne-${esc(e.id)}`);
     if (!li) return;
     li.outerHTML = htmlLigne(e);
-    if (pt) { $('#resume').innerHTML = htmlResume(pt.eleves); $('#zone-restants').innerHTML = htmlRestants(pt.eleves); }
+    if (pt) rafraichirZonesPointage();
     if (focusStatut) $(`#ligne-${esc(e.id)} [data-statut="${focusStatut}"]`)?.focus();
   }
 
@@ -542,12 +571,10 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     pointagesEnCours.add(eleveId);
     document.querySelectorAll(`#ligne-${eleveId} [data-action="pointer"]`).forEach((b) => (b.disabled = true));
     const li = $(`#ligne-${eleveId}`);
-    if (li && statut === 'absent') li.insertAdjacentHTML('beforeend', '<p class="mt-2 text-sm text-ardoise" data-attente-envoi>Envoi du message au parent…</p>');
     try {
       const ligne = await api('pointerEleve', pt.seance.id, eleveId, statut, statut === 'absent' ? (e.motif || '') : '');
       Object.assign(e, ligne);
       remplacerLigne(e, statut);
-      if (ligne.notif_statut === 'echoue') toast(`Message non envoyé au parent de ${e.prenom} ${e.nom} : ${ligne.notif_erreur}`, 'erreur', true);
     } catch (err) {
       if (!gererErreur(err)) remplacerLigne(e);
     } finally {
@@ -566,10 +593,31 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
       const rep = await api('pointerRestantsPresents', pt.seance.id);
       pt.eleves = rep.eleves;
       $('#lignes').innerHTML = pt.eleves.map(htmlLigne).join('');
-      $('#resume').innerHTML = htmlResume(pt.eleves);
-      $('#zone-restants').innerHTML = htmlRestants(pt.eleves);
+      rafraichirZonesPointage();
       toast(`${pluriel(rep.nb_pointes, 'élève marqué présent', 'élèves marqués présents')}.`, 'succes');
     } catch (err) { bouton.disabled = false; gererErreur(err); }
+  }
+
+  async function cloturerAppel(bouton) {
+    if (!pt || pointagesEnCours.size) { toast('Un pointage est en cours : réessayez dans un instant.'); return; }
+    const n = pt.eleves.filter((e) => e.statut === 'absent' && !e.notif_statut).length;
+    const restants = pt.eleves.filter((e) => !e.statut).length;
+    const ok = await confirmer({
+      titre: n ? `Prévenir ${pluriel(n, 'parent', 'parents')} ?` : "Terminer l'appel ?",
+      message: (n ? `Un message WhatsApp d'absence va partir pour ${pluriel(n, 'élève', 'élèves')}. Un message envoyé ne peut pas être rappelé.` : 'Aucun message ne sera envoyé.')
+        + (restants ? ` Attention : ${pluriel(restants, "élève n'est pas encore pointé", 'élèves ne sont pas encore pointés')}.` : ''),
+      bouton: n ? 'Envoyer les messages' : "Terminer l'appel" });
+    if (!ok) return;
+    const b = $('[data-action="cloturer-appel"]');
+    if (b) { b.disabled = true; b.textContent = 'Envoi en cours…'; }
+    try {
+      const rep = await api('cloturerAppel', pt.seance.id);
+      pt.seance = rep.seance; pt.eleves = rep.eleves;
+      $('#lignes').innerHTML = pt.eleves.map(htmlLigne).join('');
+      rafraichirZonesPointage();
+      if (rep.echoues) toast(`${pluriel(rep.echoues, "message n'a pas pu être envoyé", "messages n'ont pas pu être envoyés")}. Voyez le détail sur chaque élève concerné.`, 'erreur', true);
+      else toast(rep.envoyes ? `Appel terminé. ${pluriel(rep.envoyes, 'parent prévenu', 'parents prévenus')}.` : 'Appel terminé.', 'succes');
+    } catch (err) { if (!gererErreur(err)) rafraichirZonesPointage(); }
   }
 
   async function enregistrerMotif(eleveId, motif) {
@@ -767,7 +815,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     'invitation.creer': 'Invitation créée', 'invitation.annuler': 'Invitation annulée', 'invitation.accepter': 'Invitation acceptée',
     'eleve.creer': 'Élève ajouté', 'eleve.modifier': 'Élève modifié', 'eleve.importer': "Import d'élèves",
     'eleve.corbeille': 'Élève mis à la corbeille', 'eleve.retablir': 'Élève rétabli', 'eleve.effacer': 'Élève supprimé définitivement',
-    'seance.creer': 'Séance créée', 'seance.modifier': 'Séance modifiée',
+    'seance.creer': 'Séance créée', 'seance.modifier': 'Séance modifiée', 'seance.cloturer': 'Appel terminé',
     'classe.renommer': 'Classe renommée', 'classe.fusionner': 'Classes réunies',
     'seance.corbeille': 'Séance mise à la corbeille', 'seance.retablir': 'Séance rétablie', 'seance.effacer': 'Séance supprimée définitivement',
   };
@@ -956,7 +1004,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
           </div>
           ${n.erreur ? `<p class="mt-2 rounded-lg bg-absent-pale px-3 py-2 text-sm text-absent">${esc(n.erreur)}</p>` : ''}
           <p class="mt-1 text-xs text-ardoise">Mis à jour le ${esc(fmtHorodatage(n.maj_le))}, ${pluriel(n.tentatives, 'tentative', 'tentatives')}</p>
-          ${n.statut === 'echoue' ? `<button type="button" data-action="renvoyer" data-notif="${esc(n.id)}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
+          ${n.statut === 'echoue' || n.bloque ? `<button type="button" data-action="renvoyer" data-notif="${esc(n.id)}" class="btn btn-danger btn-petit mt-2">Renvoyer le message</button>` : ''}
         </li>`; }).join('')}</ul>`
       : carteVide('Aucun message', statut ? 'Aucun message dans cette catégorie.' : "Les messages envoyés aux parents apparaîtront ici dès la première absence.");
     return { html: `
@@ -1051,6 +1099,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     'renommer-classe': (el) => ouvrirFormClasse(el.dataset.classe),
     'plus-anciennes': (el) => { limites[el.dataset.liste] += PAS_LISTE; router(); },
     'pointer-restants': (el) => pointerRestants(el),
+    'cloturer-appel': (el) => cloturerAppel(el),
     pointer: (el) => pointer(el.dataset.eleve, el.dataset.statut),
     renvoyer: (el) => renvoyer(el.dataset.notif),
   };

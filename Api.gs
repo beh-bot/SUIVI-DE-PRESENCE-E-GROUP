@@ -558,6 +558,7 @@ function listerSeances(jeton, filtres) {
   const utilisateurs = versObjets_(FEUILLES.UTILISATEURS);
   const presences = versObjets_(FEUILLES.PRESENCES);
   const eleves = versObjets_(FEUILLES.ELEVES);
+  const nonSignalees = absencesNonSignalees_();
   return actifs_(FEUILLES.SEANCES)
     .filter((s) => u.role === 'admin' || s.enseignant_id === u.id)
     .filter((s) => !filtres.date || s.date_seance === filtres.date)
@@ -568,6 +569,7 @@ function listerSeances(jeton, filtres) {
       return Object.assign(sansLigne_(s), {
         enseignant_nom: ens ? ens.nom : '(compte supprimé)',
         attendus: eleves.filter((e) => e.classe === s.classe && attenduALaSeance_(e, pts)).length,
+        a_prevenir: nonSignalees[s.id] || 0, // absents dont le parent n'a pas encore été prévenu
         presents: pts.filter((p) => p.statut === 'present').length,
         absents: pts.filter((p) => p.statut === 'absent').length,
       });
@@ -719,8 +721,74 @@ function pointerEleve(jeton, seanceId, eleveId, statut, motif) {
     else inserer_(FEUILLES.PRESENCES, donnees);
   });
 
-  if (statut === 'absent') declencherNotificationAbsence_(seance, eleve);
+  // Aucun message ne part ici : les parents sont prévenus quand l'encadreur termine l'appel (cloturerAppel).
   return lignesPointage_(seance).find((l) => l.id === eleveId);
+}
+
+/**
+ * Par séance, le nombre d'absents dont le parent n'a encore aucun message (ni envoyé, ni en cours,
+ * ni en échec). C'est ce qui reste à faire partir en terminant l'appel.
+ */
+function absencesNonSignalees_() {
+  const actif = {};
+  actifs_(FEUILLES.ELEVES).forEach((e) => (actif[e.id] = true));
+  const deja = {};
+  versObjets_(FEUILLES.NOTIFICATIONS).forEach((n) => (deja[n.seance_id + '|' + n.eleve_id] = true));
+  const parSeance = {};
+  versObjets_(FEUILLES.PRESENCES).forEach((p) => {
+    if (p.statut === 'absent' && actif[p.eleve_id] && !deja[p.seance_id + '|' + p.eleve_id]) {
+      parSeance[p.seance_id] = (parSeance[p.seance_id] || 0) + 1;
+    }
+  });
+  return parSeance;
+}
+
+/**
+ * Termine l'appel d'une séance et prévient les parents des absents.
+ * Pendant l'appel, marquer un élève absent n'envoie rien : une erreur de doigt se corrige sans
+ * conséquence. C'est ce geste volontaire, fait une fois la liste relue, qui déclenche les messages.
+ * La fonction peut être relancée : elle n'envoie que pour les absents qui n'ont encore aucun message
+ * (par exemple un élève marqué absent après coup). Personne ne reçoit deux fois le même message.
+ */
+function cloturerAppel(jeton, seanceId) {
+  const u = exigerConnexion_(jeton);
+  const seance = chargerSeanceAvecEnseignant_(seanceId);
+  verifierAccesSeance_(seance, u);
+
+  // Sous verrou : on réserve une ligne « en attente » par message à envoyer. Un double clic, ou deux
+  // personnes qui terminent le même appel en même temps, ne trouvent donc plus rien à envoyer.
+  const aEnvoyer = avecVerrou_(() => {
+    const actuelle = trouverActifParId_(FEUILLES.SEANCES, seanceId);
+    if (!actuelle) throw new Error('Séance introuvable.');
+    const eleves = {};
+    actifs_(FEUILLES.ELEVES).forEach((e) => (eleves[e.id] = e));
+    const deja = {};
+    versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === seanceId).forEach((n) => (deja[n.eleve_id] = true));
+    const absents = versObjets_(FEUILLES.PRESENCES)
+      .filter((p) => p.seance_id === seanceId && p.statut === 'absent' && eleves[p.eleve_id] && !deja[p.eleve_id])
+      .map((p) => eleves[p.eleve_id]);
+    const maintenant = nowIso_();
+    const lignes = insererPlusieurs_(FEUILLES.NOTIFICATIONS, absents.map((e) => ({
+      seance_id: seanceId, eleve_id: e.id, telephone: e.parent_whatsapp,
+      statut: 'en_attente', erreur: '', message_id: '', tentatives: 0, maj_le: maintenant,
+    })));
+    if (!actuelle.cloture_le) mettreAJour_(FEUILLES.SEANCES, seanceId, { cloture_le: maintenant });
+    return absents.map((e, i) => ({ notifId: lignes[i].id, eleve: e }));
+  });
+
+  // Hors verrou : les envois sont des appels réseau, ils ne doivent pas bloquer les autres utilisateurs.
+  aEnvoyer.forEach((x) => tenterEnvoi_(x.notifId, seance, x.eleve));
+
+  const ids = {};
+  aEnvoyer.forEach((x) => (ids[x.notifId] = true));
+  const echoues = versObjets_(FEUILLES.NOTIFICATIONS).filter((n) => ids[n.id] && n.statut !== 'envoye').length;
+  const eleves = lignesPointage_(seance);
+  journaliser_(u, 'seance.cloturer', libelleSeance_(seance),
+    aEnvoyer.length ? (aEnvoyer.length - echoues) + ' message(s) envoyé(s), ' + echoues + ' en échec' : 'aucun message à envoyer');
+  return {
+    seance: chargerSeanceAvecEnseignant_(seanceId), eleves: eleves,
+    envoyes: aEnvoyer.length - echoues, echoues: echoues, non_pointes: eleves.filter((e) => !e.statut).length,
+  };
 }
 
 /**
@@ -801,6 +869,7 @@ function tableauDeBord(jeton, depuisIso) {
     seancesDuJour: listerSeances(jeton, { date: aujourdhui_() }),
     global: { presents: presentsTotal, total: total, taux: total ? Math.round((presentsTotal / total) * 100) : null },
     classes: classes, plusAbsents: plusAbsents, nbEleves: eleves.length,
+    seancesAPrevenir: Object.keys(absencesNonSignalees_()).filter((id) => seanceParId[id]).length,
     notificationsEchouees: versObjets_(FEUILLES.NOTIFICATIONS)
       .filter((n) => n.statut === 'echoue' && seanceParId[n.seance_id] && eleveActif[n.eleve_id]).length,
   };

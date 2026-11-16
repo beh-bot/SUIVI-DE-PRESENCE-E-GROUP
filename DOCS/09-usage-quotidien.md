@@ -92,7 +92,9 @@ Le bouton demande une confirmation, puis disparaît quand il ne reste personne �
 
 Cette fonction rend l'appel plus rapide, mais aussi moins attentif : un élève absent que l'encadreur n'a pas remarqué sera marqué présent. C'est le fonctionnement habituel d'un appel « par exception », et c'est la raison de la confirmation et du texte d'aide sous le bouton.
 
-## Ce qui n'a pas été fait : le délai avant le message WhatsApp
+## Ce qui n'avait pas été fait : le délai avant le message WhatsApp
+
+**Mise à jour :** la décision a été prise depuis. Les messages partent à la fin de l'appel : voir la fiche 13. Le texte ci-dessous est conservé pour montrer pourquoi la question avait été laissée ouverte.
 
 L'audit signalait qu'un « Absent » touché par erreur prévient le parent immédiatement, sans retour possible. Ce point n'est pas traité ici, volontairement, pour deux raisons.
 

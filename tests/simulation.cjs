@@ -127,7 +127,22 @@ test('pointage : une seule ligne par élève, notification unique', () => {
   const l2 = S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade');
   assert.strictEqual(l2.statut, 'absent');
   assert.strictEqual(l2.motif, 'Malade');
-  assert.strictEqual(l2.notif_statut, 'envoye');
+  // Marquer absent n'envoie rien : le message part quand l'encadreur termine l'appel.
+  assert.strictEqual(l2.notif_statut, null);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.NOTIFICATIONS).length, 0);
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 1);
+  // Une erreur de doigt se corrige sans conséquence : absent, puis présent, puis absent à nouveau.
+  S.pointerEleve(prof.jeton, seance.id, eleve.id, 'present', '');
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 0);
+  S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade');
+  const fin = S.cloturerAppel(prof.jeton, seance.id);
+  assert.deepStrictEqual([fin.envoyes, fin.echoues, fin.non_pointes], [1, 0, 1]);
+  assert(fin.seance.cloture_le, 'la séance doit porter la date de fin d\'appel');
+  assert.strictEqual(fin.eleves.find((l) => l.id === eleve.id).notif_statut, 'envoye');
+  assert.strictEqual(S.listerSeances(prof.jeton, {})[0].a_prevenir, 0);
+  // Relancer la clôture n'envoie rien de plus : personne ne reçoit deux fois le même message.
+  assert.strictEqual(S.cloturerAppel(prof.jeton, seance.id).envoyes, 0);
+  assert.strictEqual(S.cloturerAppel(prof.jeton, seance.id).seance.cloture_le, fin.seance.cloture_le);
   // Corriger le motif ne doit pas changer l'heure du pointage d'origine.
   S.mettreAJour_(S.FEUILLES.PRESENCES, S.versObjets_(S.FEUILLES.PRESENCES)[0].id, { horodatage: '2026-11-16T08:31:00.000Z' });
   const l3 = S.pointerEleve(prof.jeton, seance.id, eleve.id, 'absent', 'Malade (certificat)');
@@ -506,6 +521,56 @@ test('journal : un classeur sans feuille Journal la reçoit, et une panne du jou
   assert.strictEqual(maj.classe, '6e Y');
   assert.strictEqual(S.trouverParId_(S.FEUILLES.ELEVES, e.id).classe, '6e Y');
   assert(!verrou.tenu, 'verrou non rendu après la panne');
+});
+
+test('fin d\'appel : échec d\'envoi, absent ajouté après coup, élève retiré, droits', () => {
+  S.importerEleves(admin.jeton, 'Un;A;CM2;P1;+2250700000301\nDeux;B;CM2;P2;+2250700000302\nTrois;C;CM2;P3;+2250700000303\nQuatre;D;CM2;P4;+2250700000304', false);
+  const dejaAPrevenir = S.tableauDeBord(admin.jeton, null).seancesAPrevenir; // une séance d'un test précédent n'a pas été terminée
+  const s = S.creerSeance(admin.jeton, { matiere: 'Calcul', date_seance: '2026-11-23', heure_debut: '08:00', classe: 'CM2' });
+  const [deux, quatre, trois, un] = S.ouvrirPointage(admin.jeton, s.id).eleves; // ordre alphabétique
+  assert.deepStrictEqual([deux.nom, quatre.nom, trois.nom, un.nom], ['Deux', 'Quatre', 'Trois', 'Un']);
+  S.pointerEleve(admin.jeton, s.id, un.id, 'absent', '');
+  S.pointerEleve(admin.jeton, s.id, deux.id, 'absent', '');
+  S.pointerEleve(admin.jeton, s.id, trois.id, 'present', '');
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).seancesAPrevenir, dejaAPrevenir + 1);
+  // Un élève placé dans la corbeille avant la fin de l'appel n'est pas prévenu.
+  S.supprimerEleve(admin.jeton, deux.id);
+  // Un encadreur à qui la séance n'est pas attribuée ne peut pas la terminer.
+  const autre = S.connexion('koffi.jean', 'remplace-99');
+  S.changerMonMotDePasse(autre.jeton, 'remplace-99', 'koffi-perso-1');
+  echoue(() => S.cloturerAppel(autre.jeton, s.id), /pas attribuée/);
+  echoue(() => S.cloturerAppel('faux', s.id), /SESSION_EXPIREE/);
+  // WhatsApp en panne : l'appel est quand même terminé, le message est marqué en échec et peut être renvoyé.
+  proprietes.WHATSAPP_DRY_RUN = 'false';
+  const rate = S.cloturerAppel(admin.jeton, s.id);
+  proprietes.WHATSAPP_DRY_RUN = 'true';
+  assert.deepStrictEqual([rate.envoyes, rate.echoues, rate.non_pointes], [0, 1, 1]);
+  const ligneUn = rate.eleves.find((l) => l.id === un.id);
+  assert.strictEqual(ligneUn.notif_statut, 'echoue');
+  assert(rate.seance.cloture_le);
+  assert.strictEqual(S.cloturerAppel(admin.jeton, s.id).envoyes, 0, 'un message en échec ne repart pas tout seul');
+  assert.strictEqual(S.renvoyerNotification(admin.jeton, ligneUn.notif_id).statut, 'envoye');
+  // Un absent ajouté après la fin de l'appel : rien ne part tant qu'on ne relance pas l'envoi.
+  S.pointerEleve(admin.jeton, s.id, quatre.id, 'absent', 'Arrivé puis reparti');
+  assert.strictEqual(S.listerSeances(admin.jeton, {}).find((x) => x.id === s.id).a_prevenir, 1);
+  const suite = S.cloturerAppel(admin.jeton, s.id);
+  assert.deepStrictEqual([suite.envoyes, suite.echoues, suite.non_pointes], [1, 0, 0]);
+  assert.strictEqual(suite.seance.cloture_le, rate.seance.cloture_le, 'la date de fin d\'appel ne change pas');
+  const notifs = S.versObjets_(S.FEUILLES.NOTIFICATIONS).filter((n) => n.seance_id === s.id);
+  assert.deepStrictEqual(notifs.map((n) => n.eleve_id).sort(), [un.id, quatre.id].sort(), 'un message par absent actif, pas plus');
+  assert.strictEqual(S.tableauDeBord(admin.jeton, null).seancesAPrevenir, dejaAPrevenir);
+  assert(S.listerJournal(admin.jeton).some((l) => l.action === 'seance.cloturer' && /1 en échec/.test(l.detail)));
+  assert(!verrou.tenu);
+});
+
+test('message resté « en cours » : renvoyable seulement après dix minutes', () => {
+  const n = S.versObjets_(S.FEUILLES.NOTIFICATIONS).find((x) => x.statut === 'envoye');
+  S.mettreAJour_(S.FEUILLES.NOTIFICATIONS, n.id, { statut: 'en_attente', maj_le: new Date().toISOString() });
+  echoue(() => S.renvoyerNotification(admin.jeton, n.id), /Seul un message échoué/);
+  assert.strictEqual(S.listerNotifications(admin.jeton, 'en_attente').find((x) => x.id === n.id).bloque, false);
+  S.mettreAJour_(S.FEUILLES.NOTIFICATIONS, n.id, { maj_le: new Date(Date.now() - 11 * 60 * 1000).toISOString() });
+  assert.strictEqual(S.listerNotifications(admin.jeton, 'en_attente').find((x) => x.id === n.id).bloque, true);
+  assert.strictEqual(S.renvoyerNotification(admin.jeton, n.id).statut, 'envoye');
 });
 
 console.log(`${nbTests} tests réussis.`);

@@ -38,6 +38,7 @@ function semer() {
   };
   const hier = S.creerSeance(admin.jeton, { matiere: 'Physique-Chimie', date_seance: jour(-1), heure_debut: '15:00', classe: '3e A', enseignant_id: prof.id });
   eleves.filter((e) => e.classe === '3e A').forEach((e, i) => S.pointerEleve(admin.jeton, hier.id, e.id, i === 1 ? 'absent' : 'present', i === 1 ? 'Malade' : ''));
+  S.cloturerAppel(admin.jeton, hier.id); // l'appel d'hier est terminé : le parent de l'absent a été prévenu
   S.creerSeance(admin.jeton, { matiere: 'Mathématiques', date_seance: jour(0), heure_debut: '08:30', classe: '3e A', enseignant_id: prof.id });
   S.creerSeance(admin.jeton, { matiere: 'SVT', date_seance: jour(0), heure_debut: '10:30', classe: 'Tle D', enseignant_id: admin.id });
   S.deconnexion(admin.jeton);
