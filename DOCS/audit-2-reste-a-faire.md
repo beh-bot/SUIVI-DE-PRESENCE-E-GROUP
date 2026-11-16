@@ -102,7 +102,7 @@ Ces éléments ne changent rien au fonctionnement, mais ce sont eux qu'un jury d
 
 ## Ordre de travail proposé
 
-1. **Valider** : copie de test, mesures, contrôles de production (section 1).
+1. **Valider** : copie de test, mesures, contrôles de production (section 1). La marche à suivre, case par case, est dans la [fiche 12](12-guide-de-test.md).
 2. **Fiabiliser le déploiement** : `clasp`, manifeste versionné, intégration continue (section 6).
 3. **Protéger les données** : sauvegarde, désactivation au lieu de suppression (section 3).
 4. **Corriger l'usage quotidien** : délai d'annulation WhatsApp, modification de séance, import d'élèves, « tous présents » (section 4).

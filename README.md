@@ -74,7 +74,7 @@ Le modèle reçoit quatre variables, dans cet ordre : nom de l'élève, matière
 npm test
 ```
 
-Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement. GitHub le lance automatiquement à chaque envoi de code et sur chaque pull request.
+Le test rejoue un scénario complet (comptes, invitation, pointage, exports, suppressions) contre des imitations en mémoire des services Google. Il attrape les erreurs de logique, mais ne remplace pas un essai dans le vrai déploiement. GitHub le lance automatiquement à chaque envoi de code et sur chaque pull request. Le guide de test manuel, à suivre dans une copie de test Google avant toute mise en production, est dans `DOCS/12-guide-de-test.md`.
 
 ## Aperçu local
 

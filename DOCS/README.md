@@ -17,6 +17,7 @@ L'ordre de lecture conseillé suit l'ordre des commits de la branche `develop`.
 | [09](09-usage-quotidien.md) | Modifier une séance, importer des élèves, valider les présents d'un geste | voir l'historique |
 | [10](10-fin-de-la-securite.md) | Identifiants indiscernables à la connexion, jetons de session hachés, journal des actions | voir l'historique |
 | [11](11-classes-listes-et-premier-mot-de-passe.md) | Écriture unique des classes, listes longues, mot de passe à changer à la première connexion | voir l'historique |
+| [12](12-guide-de-test.md) | Guide de test : vérifier soi-même tout le travail, de l'ordinateur à une copie de test Google | voir l'historique |
 | [Audit 2](audit-2-reste-a-faire.md) | Ce qu'il reste à améliorer | |
 
-Aucune de ces modifications n'a encore été essayée dans un vrai déploiement Apps Script. Elles sont vérifiées par les tests de la fiche 05, qui tournent sur un ordinateur avec de faux services Google.
+Aucune de ces modifications n'a encore été essayée dans un vrai déploiement Apps Script. Elles sont vérifiées par les tests de la fiche 05, qui tournent sur un ordinateur avec de faux services Google. **La fiche 12 est le guide à suivre pour les essayer réellement, avant toute mise en production.**
