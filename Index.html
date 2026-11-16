@@ -280,6 +280,7 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
     [/^#\/enseignants$/, 'enseignants', vueEnseignants],
     [/^#\/messages(?:\?(.*))?$/, 'messages', vueMessages],
     [/^#\/corbeille$/, 'eleves', vueCorbeille],
+    [/^#\/journal$/, 'enseignants', vueJournal],
   ];
 
   async function router() {
@@ -728,7 +729,36 @@ document.querySelectorAll("img[data-logo]").forEach(function(i){i.src=document.q
             <a href="${esc(lienWhatsApp(i.lien))}" target="_blank" rel="noopener" class="btn btn-secondaire btn-petit">WhatsApp</a>`
               : `<p class="w-full break-all text-xs text-ardoise">Ajoutez <strong>?invitation=${esc(i.id)}</strong> à la fin de l'adresse de l'application.</p>`}
             <button type="button" data-action="revoquer-invitation" data-id="${esc(i.id)}" class="btn btn-danger btn-petit">Annuler</button>
-          </div></li>`).join('')}</ul>` : ''}` };
+          </div></li>`).join('')}</ul>` : ''}
+      <p class="mt-6 text-sm"><a href="#/journal" class="text-ardoise underline">Journal des actions : qui a fait quoi, et quand</a></p>` };
+  }
+
+  // ── Écran : Journal des actions ───────────────────────────────────────
+  const LIBELLE_ACTION = {
+    connexion: 'Connexion',
+    'compte.creer': 'Compte créé', 'compte.modifier': 'Compte modifié', 'compte.supprimer': 'Compte supprimé', 'compte.mot_de_passe': 'Mot de passe changé',
+    'invitation.creer': 'Invitation créée', 'invitation.annuler': 'Invitation annulée', 'invitation.accepter': 'Invitation acceptée',
+    'eleve.creer': 'Élève ajouté', 'eleve.modifier': 'Élève modifié', 'eleve.importer': "Import d'élèves",
+    'eleve.corbeille': 'Élève mis à la corbeille', 'eleve.retablir': 'Élève rétabli', 'eleve.effacer': 'Élève supprimé définitivement',
+    'seance.creer': 'Séance créée', 'seance.modifier': 'Séance modifiée',
+    'seance.corbeille': 'Séance mise à la corbeille', 'seance.retablir': 'Séance rétablie', 'seance.effacer': 'Séance supprimée définitivement',
+  };
+  async function vueJournal() {
+    const lignes = await api('listerJournal');
+    const liste = lignes.length
+      ? `<ul class="liste mt-4">${lignes.map((l) => `<li class="px-4 py-3">
+          <div class="flex items-baseline justify-between gap-3">
+            <p class="font-medium">${esc(LIBELLE_ACTION[l.action] || l.action)}</p>
+            <p class="shrink-0 text-xs text-ardoise">${esc(fmtHorodatage(l.horodatage))}</p>
+          </div>
+          <p class="text-sm">${esc(l.cible)}${l.detail ? ` <span class="text-ardoise">(${esc(l.detail)})</span>` : ''}</p>
+          <p class="text-xs text-ardoise">Par ${esc(l.utilisateur_nom || 'inconnu')}</p></li>`).join('')}</ul>`
+      : `<div class="mt-4">${carteVide('Journal vide', 'Les connexions et les modifications apparaîtront ici.')}</div>`;
+    return { html: `
+      <a href="#/enseignants" class="text-sm text-ardoise underline">Retour aux encadreurs</a>
+      <h1 class="titre-page mt-2">Journal des actions</h1>
+      <p class="text-ardoise">Les 200 dernières actions. Le journal complet se trouve dans la feuille « Journal » du classeur. Les pointages n'y figurent pas : leur heure et leur auteur sont sur chaque feuille de présence.</p>
+      ${liste}` };
   }
 
   function genererMotDePasse() {

@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const assert = require('assert');
 const { creerEnvironnement, racine } = require('./faux-google.cjs');
 
-const { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte } = creerEnvironnement();
+const { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte, compteurs } = creerEnvironnement();
 
 let nbTests = 0;
 function test(nom, fn) {
@@ -59,7 +59,7 @@ test('initialisation des feuilles, refusée hors de Google Sheets', () => {
   assert.strictEqual(Object.keys(feuilles).length, 0);
   contexte.dansSheets = true;
   S.initialiserFeuilles();
-  assert.strictEqual(Object.keys(feuilles).length, 6);
+  assert.strictEqual(Object.keys(feuilles).length, 7);
   contexte.dansSheets = false;
 });
 
@@ -326,7 +326,7 @@ test('import d\'élèves : séparateurs, guillemets, titres, doublons, tout ou r
   // Import réel, en une seule écriture.
   const prises = verrou.prises;
   assert.strictEqual(S.importerEleves(admin.jeton, liste, false).ajoutes, 2);
-  assert.strictEqual(verrou.prises, prises + 1);
+  assert.strictEqual(verrou.prises, prises + 2); // une prise pour l'import, une pour la ligne de journal
   const importes = S.listerEleves(admin.jeton).filter((e) => e.classe === '6e Z');
   assert.deepStrictEqual(importes.map((e) => [e.nom, e.parent_nom, e.parent_whatsapp]),
     [['Konan', 'Mme Konan', '+2250700000101'], ['Touré', 'M. Touré; père', '+2250700000102']]);
@@ -366,6 +366,80 @@ test('modification d\'une séance : les pointages sont conservés, la classe est
   const vide = S.creerSeance(admin.jeton, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Y' });
   assert.strictEqual(S.modifierSeance(admin.jeton, vide.id, { matiere: 'EPS', date_seance: '2026-11-20', heure_debut: '08:00', classe: '6e Z' }).classe, '6e Z');
   assert.strictEqual(S.trouverParId_(S.FEUILLES.SEANCES, vide.id).enseignant_id, admin.id, 'sans encadreur fourni, celui de la séance est gardé');
+});
+
+test('connexion : un identifiant inconnu coûte autant de calcul qu\'un mot de passe faux', () => {
+  const cout = (identifiant) => {
+    Object.keys(cache).forEach((k) => delete cache[k]);
+    const avant = compteurs.hmac;
+    echoue(() => S.connexion(identifiant, 'mauvais-mot-de-passe'), /Identifiant ou mot de passe incorrect/);
+    return compteurs.hmac - avant;
+  };
+  const existant = cout('awa.admin');
+  assert(existant >= 2000, 'le mot de passe doit être vérifié par le calcul lent');
+  assert.strictEqual(cout('personne.ici'), existant);
+  Object.keys(cache).forEach((k) => delete cache[k]);
+});
+
+test('sessions : le jeton n\'est pas stocké, seulement son empreinte', () => {
+  const s = S.connexion('awa.admin', 'motdepasse1');
+  const cles = Object.keys(proprietes).filter((k) => k.startsWith('session_'));
+  assert(cles.length >= 1);
+  assert(!JSON.stringify(proprietes).includes(s.jeton), 'le jeton apparaît en clair dans les propriétés');
+  assert(cles.includes('session_' + crypto.createHash('sha256').update(s.jeton).digest('hex')));
+  assert.strictEqual(S.moi(s.jeton).nom, 'Awa Admin');
+  // Une session enregistrée à l'ancienne manière (clé = jeton en clair) n'est plus acceptée.
+  proprietes['session_ancien-jeton'] = JSON.stringify({ id: admin.id, expire: Date.now() + 60000 });
+  echoue(() => S.moi('ancien-jeton'), /SESSION_EXPIREE/);
+  echoue(() => S.moi({ toString: () => s.jeton }), /SESSION_EXPIREE/);
+  // Changer de mot de passe garde la session courante et coupe l'autre.
+  S.changerMonMotDePasse(s.jeton, 'motdepasse1', 'motdepasse1-bis');
+  S.moi(s.jeton);
+  echoue(() => S.moi(admin.jeton), /SESSION_EXPIREE/);
+  S.deconnexion(s.jeton);
+  echoue(() => S.moi(s.jeton), /SESSION_EXPIREE/);
+  admin = S.connexion('awa.admin', 'motdepasse1-bis');
+});
+
+test('journal : les actions sont tracées, sans secret, et lisibles par l\'administrateur seul', () => {
+  const journal = S.versObjets_(S.FEUILLES.JOURNAL);
+  const actions = journal.map((l) => l.action);
+  ['connexion', 'invitation.creer', 'invitation.accepter', 'compte.supprimer', 'compte.mot_de_passe', 'eleve.creer', 'eleve.importer',
+    'eleve.corbeille', 'eleve.retablir', 'eleve.effacer', 'seance.creer', 'seance.modifier', 'seance.corbeille', 'seance.retablir', 'seance.effacer',
+  ].forEach((a) => assert(actions.includes(a), 'action absente du journal : ' + a));
+  const import_ = journal.find((l) => l.action === 'eleve.importer');
+  assert.deepStrictEqual([import_.utilisateur_nom, import_.cible, import_.detail], ['Awa Admin', '2 élève(s)', '6e Z : 2']);
+  assert(journal.every((l) => l.id && l.horodatage));
+  // Ni mot de passe, ni jeton, ni numéro de téléphone dans le journal.
+  const brut = JSON.stringify(journal);
+  ['motdepasse', 'nouveaupasse9', admin.jeton, '+225'].forEach((secret) => assert(!brut.includes(secret), 'secret dans le journal : ' + secret));
+  // Une action refusée ou simulée ne laisse pas de trace.
+  const nb = journal.length;
+  echoue(() => S.supprimerEleve(admin.jeton, 'inconnu'), /introuvable/);
+  S.importerEleves(admin.jeton, 'Sow;Binta;6e Z;Mme Sow;+2250700000199', true);
+  assert.strictEqual(S.versObjets_(S.FEUILLES.JOURNAL).length, nb);
+  // Lecture : les plus récentes d'abord, pour l'administrateur seulement.
+  const enc = S.creerUtilisateur(admin.jeton, { nom: 'Bamba Seydou', email: 'bamba.seydou', mot_de_passe: 'motdepasse5', role: 'enseignant' });
+  const lu = S.listerJournal(admin.jeton);
+  assert.deepStrictEqual([lu[0].action, lu[0].cible, lu[0].detail], ['compte.creer', 'bamba.seydou', 'enseignant']);
+  assert(!('utilisateur_id' in lu[0]));
+  echoue(() => S.listerJournal(S.connexion('bamba.seydou', 'motdepasse5').jeton), /réservée/);
+  assert(enc.id);
+});
+
+test('journal : un classeur sans feuille Journal la reçoit, et une panne du journal ne bloque pas l\'action', () => {
+  delete feuilles.Journal;
+  const e = S.creerEleve(admin.jeton, { nom: 'Sans', prenom: 'Journal', classe: '6e Z', parent_nom: 'P', parent_whatsapp: '+2250700000198' });
+  assert(feuilles.Journal, 'feuille Journal non recréée');
+  assert.strictEqual(S.versObjets_(S.FEUILLES.JOURNAL).length, 1);
+  // Panne : la feuille Journal refuse toute écriture. L'élève doit quand même être modifié.
+  const vraie = feuilles.Journal.getRange;
+  feuilles.Journal.getRange = () => { throw new Error('écriture refusée'); };
+  const maj = S.modifierEleve(admin.jeton, e.id, { nom: 'Sans', prenom: 'Journal', classe: '6e Y', parent_nom: 'P', parent_whatsapp: '+2250700000198' });
+  feuilles.Journal.getRange = vraie;
+  assert.strictEqual(maj.classe, '6e Y');
+  assert.strictEqual(S.trouverParId_(S.FEUILLES.ELEVES, e.id).classe, '6e Y');
+  assert(!verrou.tenu, 'verrou non rendu après la panne');
 });
 
 console.log(`${nbTests} tests réussis.`);

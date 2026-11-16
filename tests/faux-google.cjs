@@ -67,6 +67,7 @@ function creerEnvironnement(options) {
   const alertes = [];
   const verrou = { tenu: false, prises: 0 };
   const contexte = { dansSheets: true };
+  const compteurs = { hmac: 0 }; // nombre de calculs HMAC demandés (sert à vérifier le coût d'une connexion)
 
   // Un classeur = un ensemble de feuilles. Le classeur principal utilise l'objet « feuilles » exposé aux tests.
   const classeurs = {};
@@ -136,7 +137,7 @@ function creerEnvironnement(options) {
       DigestAlgorithm: { SHA_256: 1 },
       Charset: { UTF_8: 1 },
       computeDigest: (a, t) => signe(crypto.createHash('sha256').update(t, 'utf8').digest()),
-      computeHmacSha256Signature: (v, k) => signe(crypto.createHmac('sha256', octets(k)).update(octets(v)).digest()),
+      computeHmacSha256Signature: (v, k) => (compteurs.hmac++, signe(crypto.createHmac('sha256', octets(k)).update(octets(v)).digest())),
       // getAs() : la vraie conversion HTML -> PDF est faite par Google ; ici on renvoie un faux fichier.
       newBlob: (s) => ({ getBytes: () => signe(Buffer.from(s, 'utf8')), getAs: () => ({ getBytes: () => signe(Buffer.from('%PDF-faux')) }) }),
       base64Encode: (b) => octets(b).toString('base64'),
@@ -171,7 +172,7 @@ function creerEnvironnement(options) {
   const source = FICHIERS.map((f) => fs.readFileSync(path.join(racine, f), 'utf8')).join('\n');
   const noms = [...source.matchAll(/^function (\w+)\(/gm)].map((m) => m[1]);
   const S = new Function(...Object.keys(services), `${source}\nreturn { ${noms.join(', ')}, FEUILLES };`)(...Object.values(services));
-  return { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte };
+  return { S, noms, feuilles, classeurs, declencheurs, proprietes, cache, verrou, alertes, contexte, compteurs };
 }
 
 module.exports = { creerEnvironnement, racine };

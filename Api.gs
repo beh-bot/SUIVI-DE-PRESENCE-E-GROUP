@@ -110,6 +110,7 @@ function creerInvitation(jeton, champs) {
   const inv = inserer_(FEUILLES.INVITATIONS, {
     role: role, nom_suggere: nom, expire_le: new Date(Date.now() + DUREE_INVITATION_MS).toISOString(), utilise_le: '', cree_par: u.id,
   });
+  journaliser_(u, 'invitation.creer', nom || '(sans nom)', role);
   return resumeInvitation_(inv);
 }
 
@@ -122,8 +123,10 @@ function listerInvitations(jeton) {
 }
 
 function revoquerInvitation(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  const inv = trouverParId_(FEUILLES.INVITATIONS, id);
   if (!supprimerLigne_(FEUILLES.INVITATIONS, id)) throw new Error('Invitation introuvable.');
+  journaliser_(u, 'invitation.annuler', (inv && inv.nom_suggere) || '(sans nom)', inv ? inv.role : '');
   return { ok: true };
 }
 
@@ -146,6 +149,7 @@ function accepterInvitation(id, champs) {
     mettreAJour_(FEUILLES.INVITATIONS, inv.id, { utilise_le: nowIso_() });
     return compte;
   });
+  journaliser_(u, 'invitation.accepter', u.email, u.role);
   const jeton = creerSession_(u);
   return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
@@ -163,9 +167,11 @@ function listerUtilisateurs(jeton) {
 }
 
 function creerUtilisateur(jeton, champs) {
-  exigerAdmin_(jeton);
+  const admin = exigerAdmin_(jeton);
+  champs = champs || {};
   const role = champs.role === 'admin' ? 'admin' : 'enseignant';
   const u = creerCompteInterne_(champs.nom, champs.email, champs.mot_de_passe, role);
+  journaliser_(admin, 'compte.creer', u.email, u.role);
   return { id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
@@ -196,6 +202,7 @@ function modifierUtilisateur(jeton, id, champs) {
     return mettreAJour_(FEUILLES.UTILISATEURS, id, patch);
   });
   if (champs.mot_de_passe && id !== moiCourant.id) invaliderSessionsUtilisateur_(id);
+  journaliser_(moiCourant, 'compte.modifier', maj.email, maj.role + (champs.mot_de_passe ? ', mot de passe remplacé' : ''));
   return { id: maj.id, nom: maj.nom, email: maj.email, role: maj.role };
 }
 
@@ -207,9 +214,11 @@ function modifierUtilisateur(jeton, id, champs) {
 function supprimerUtilisateur(jeton, id, reassignerA) {
   const moiCourant = exigerAdmin_(jeton);
   if (id === moiCourant.id) throw new Error('Vous ne pouvez pas supprimer votre propre compte.');
+  let identifiantSupprime = '';
   const resultat = avecVerrou_(() => {
     const u = trouverParId_(FEUILLES.UTILISATEURS, id);
     if (!u || !u.actif) throw new Error('Compte introuvable.');
+    identifiantSupprime = u.email;
 
     const toutes = versObjets_(FEUILLES.SEANCES).filter((s) => s.enseignant_id === id);
     const seances = toutes.filter((s) => !s.supprime_le); // celles de la corbeille n'obligent pas à choisir un repreneur
@@ -224,8 +233,22 @@ function supprimerUtilisateur(jeton, id, reassignerA) {
     mettreAJour_(FEUILLES.UTILISATEURS, id, { actif: false, email: `supprime-${id}-${u.email}` });
     return { ok: true, seances_reattribuees: seances.length };
   });
-  if (resultat.ok) invaliderSessionsUtilisateur_(id);
+  if (resultat.ok) {
+    invaliderSessionsUtilisateur_(id);
+    journaliser_(moiCourant, 'compte.supprimer', identifiantSupprime, resultat.seances_reattribuees ? resultat.seances_reattribuees + ' séance(s) transférée(s)' : '');
+  }
   return resultat;
+}
+
+// ── Journal des actions ───────────────────────────────────────────────
+
+/** Les 200 dernières actions, de la plus récente à la plus ancienne. Le journal complet reste dans la feuille « Journal ». */
+function listerJournal(jeton) {
+  exigerAdmin_(jeton);
+  return versObjets_(FEUILLES.JOURNAL)
+    .sort((a, b) => String(b.horodatage).localeCompare(String(a.horodatage)))
+    .slice(0, 200)
+    .map((l) => ({ horodatage: l.horodatage, utilisateur_nom: l.utilisateur_nom, action: l.action, cible: l.cible, detail: l.detail }));
 }
 
 // ── Élèves ────────────────────────────────────────────────────────────
@@ -256,9 +279,15 @@ function validerEleve_(champs) {
   };
 }
 
+function libelleEleve_(e) {
+  return e.nom + ' ' + e.prenom + ' (' + e.classe + ')';
+}
+
 function creerEleve(jeton, champs) {
-  exigerAdmin_(jeton);
-  return sansLigne_(inserer_(FEUILLES.ELEVES, validerEleve_(champs)));
+  const u = exigerAdmin_(jeton);
+  const e = inserer_(FEUILLES.ELEVES, validerEleve_(champs));
+  journaliser_(u, 'eleve.creer', libelleEleve_(e));
+  return sansLigne_(e);
 }
 
 // ── Import d'une liste d'élèves ───────────────────────────────────────
@@ -307,7 +336,7 @@ function cleEleve_(e) {
  * Avec simulation = true, rien n'est écrit : on obtient seulement le bilan.
  */
 function importerEleves(jeton, texte, simulation) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
   if (typeof texte !== 'string' || !texte.trim()) throw new Error('La liste est vide.');
   if (texte.length > 200000) throw new Error('La liste est trop longue. Importez-la en plusieurs fois.');
   let lignes = analyserCsv_(texte).map((cellules, i) => ({ numero: i + 1, cellules: cellules }));
@@ -332,7 +361,7 @@ function importerEleves(jeton, texte, simulation) {
   });
   if (erreurs.length) return { ok: false, erreurs: erreurs.slice(0, 50), nb_erreurs: erreurs.length };
 
-  return avecVerrou_(() => {
+  const bilan = avecVerrou_(() => {
     const connus = {};
     actifs_(FEUILLES.ELEVES).forEach((e) => (connus[cleEleve_(e)] = true));
     const nouveaux = valides.filter((e) => {
@@ -348,13 +377,18 @@ function importerEleves(jeton, texte, simulation) {
       classes: Object.keys(classes).sort().map((c) => ({ classe: c, nb: classes[c] })),
     };
   });
+  if (!simulation && bilan.ajoutes) {
+    journaliser_(u, 'eleve.importer', bilan.ajoutes + ' élève(s)', bilan.classes.map((c) => c.classe + ' : ' + c.nb).join(', '));
+  }
+  return bilan;
 }
 
 function modifierEleve(jeton, id, champs) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
   const donnees = validerEleve_(champs);
   const maj = avecVerrou_(() => (trouverActifParId_(FEUILLES.ELEVES, id) ? mettreAJour_(FEUILLES.ELEVES, id, donnees) : null));
   if (!maj) throw new Error('Élève introuvable.');
+  journaliser_(u, 'eleve.modifier', libelleEleve_(maj));
   return sansLigne_(maj);
 }
 
@@ -364,44 +398,47 @@ function modifierEleve(jeton, id, champs) {
  * se fait depuis la corbeille (supprimerEleveDefinitivement).
  */
 function supprimerEleve(jeton, id) {
-  exigerAdmin_(jeton);
-  mettreALaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable.');
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'eleve.corbeille', libelleEleve_(mettreALaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable.')));
   return { ok: true };
 }
 
 function restaurerEleve(jeton, id) {
-  exigerAdmin_(jeton);
-  sortirDeLaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable dans la corbeille.');
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'eleve.retablir', libelleEleve_(sortirDeLaCorbeille_(FEUILLES.ELEVES, id, 'Élève introuvable dans la corbeille.')));
   return { ok: true };
 }
 
 /** Efface pour de bon un élève de la corbeille, avec ses pointages et ses messages. Irréversible. */
 function supprimerEleveDefinitivement(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  let libelle = '';
   avecVerrou_(() => {
     const e = trouverParId_(FEUILLES.ELEVES, id);
     if (!e || !e.supprime_le) throw new Error("Élève introuvable dans la corbeille. Placez-le d'abord dans la corbeille.");
+    libelle = libelleEleve_(e);
     supprimerLigne_(FEUILLES.ELEVES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.eleve_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.eleve_id === id);
   });
+  journaliser_(u, 'eleve.effacer', libelle, 'avec ses pointages');
   return { ok: true };
 }
 
 // ── Corbeille (élèves et séances) ───────────────────────────────────
 
 function mettreALaCorbeille_(def, id, messageIntrouvable) {
-  avecVerrou_(() => {
+  return avecVerrou_(() => {
     if (!trouverActifParId_(def, id)) throw new Error(messageIntrouvable);
-    mettreAJour_(def, id, { supprime_le: nowIso_() });
+    return mettreAJour_(def, id, { supprime_le: nowIso_() });
   });
 }
 
 function sortirDeLaCorbeille_(def, id, messageIntrouvable) {
-  avecVerrou_(() => {
+  return avecVerrou_(() => {
     const o = trouverParId_(def, id);
     if (!o || !o.supprime_le) throw new Error(messageIntrouvable);
-    mettreAJour_(def, id, { supprime_le: '' });
+    return mettreAJour_(def, id, { supprime_le: '' });
   });
 }
 
@@ -496,9 +533,14 @@ function validerSeance_(champs, enseignantParDefaut) {
   };
 }
 
+function libelleSeance_(s) {
+  return s.matiere + ', ' + s.classe + ', ' + s.date_seance + ' ' + s.heure_debut;
+}
+
 function creerSeance(jeton, champs) {
   const u = exigerAdmin_(jeton);
   const s = inserer_(FEUILLES.SEANCES, validerSeance_(champs, u.id));
+  journaliser_(u, 'seance.creer', libelleSeance_(s));
   return chargerSeanceAvecEnseignant_(s.id);
 }
 
@@ -508,42 +550,46 @@ function creerSeance(jeton, champs) {
  * concerneraient des élèves qui ne sont pas dans la nouvelle classe.
  */
 function modifierSeance(jeton, id, champs) {
-  exigerAdmin_(jeton);
-  avecVerrou_(() => {
+  const u = exigerAdmin_(jeton);
+  const maj = avecVerrou_(() => {
     const actuelle = trouverActifParId_(FEUILLES.SEANCES, id);
     if (!actuelle) throw new Error('Séance introuvable.');
     const donnees = validerSeance_(champs, actuelle.enseignant_id);
     if (donnees.classe !== actuelle.classe && versObjets_(FEUILLES.PRESENCES).some((p) => p.seance_id === id)) {
       throw new Error("L'appel de cette séance a commencé : sa classe ne peut plus être changée. Créez une autre séance pour l'autre classe.");
     }
-    mettreAJour_(FEUILLES.SEANCES, id, donnees);
+    return mettreAJour_(FEUILLES.SEANCES, id, donnees);
   });
+  journaliser_(u, 'seance.modifier', libelleSeance_(maj));
   return chargerSeanceAvecEnseignant_(id);
 }
 
 /** « Supprimer » une séance la place dans la corbeille : ses pointages sont conservés mais ne comptent plus. */
 function supprimerSeance(jeton, id) {
-  exigerAdmin_(jeton);
-  mettreALaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable.');
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'seance.corbeille', libelleSeance_(mettreALaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable.')));
   return { ok: true };
 }
 
 function restaurerSeance(jeton, id) {
-  exigerAdmin_(jeton);
-  sortirDeLaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable dans la corbeille.');
+  const u = exigerAdmin_(jeton);
+  journaliser_(u, 'seance.retablir', libelleSeance_(sortirDeLaCorbeille_(FEUILLES.SEANCES, id, 'Séance introuvable dans la corbeille.')));
   return { ok: true };
 }
 
 /** Efface pour de bon une séance de la corbeille, avec ses pointages et ses messages. Irréversible. */
 function supprimerSeanceDefinitivement(jeton, id) {
-  exigerAdmin_(jeton);
+  const u = exigerAdmin_(jeton);
+  let libelle = '';
   avecVerrou_(() => {
     const s = trouverParId_(FEUILLES.SEANCES, id);
     if (!s || !s.supprime_le) throw new Error("Séance introuvable dans la corbeille. Placez-la d'abord dans la corbeille.");
+    libelle = libelleSeance_(s);
     supprimerLigne_(FEUILLES.SEANCES, id);
     supprimerToutesLignesOu_(FEUILLES.PRESENCES, (p) => p.seance_id === id);
     supprimerToutesLignesOu_(FEUILLES.NOTIFICATIONS, (n) => n.seance_id === id);
   });
+  journaliser_(u, 'seance.effacer', libelle, 'avec ses pointages');
   return { ok: true };
 }
 

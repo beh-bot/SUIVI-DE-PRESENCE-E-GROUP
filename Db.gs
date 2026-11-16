@@ -10,6 +10,8 @@ const FEUILLES = {
   SEANCES: { nom: 'Seances', entetes: ['id', 'matiere', 'date_seance', 'heure_debut', 'classe', 'enseignant_id', 'cree_le', 'supprime_le'] },
   PRESENCES: { nom: 'Presences', entetes: ['id', 'seance_id', 'eleve_id', 'statut', 'motif', 'horodatage', 'pointe_par'] },
   INVITATIONS: { nom: 'Invitations', entetes: ['id', 'role', 'nom_suggere', 'expire_le', 'utilise_le', 'cree_par', 'cree_le'] },
+  // Journal des actions : qui a fait quoi et quand. On y ajoute des lignes, on n'en modifie jamais (voir journaliser_).
+  JOURNAL: { nom: 'Journal', entetes: ['id', 'horodatage', 'utilisateur_id', 'utilisateur_nom', 'action', 'cible', 'detail'] },
   NOTIFICATIONS: { nom: 'Notifications', entetes: ['id', 'seance_id', 'eleve_id', 'telephone', 'statut', 'erreur', 'message_id', 'tentatives', 'cree_le', 'maj_le'] },
 };
 
@@ -35,8 +37,9 @@ function classeur_() {
 /** Feuille correspondant à une définition de FEUILLES. Message clair si « Initialiser » n'a pas été lancé. */
 function feuille_(def) {
   let s = classeur_().getSheetByName(def.nom);
-  // La feuille des invitations a été ajoutée après la première version : on la crée automatiquement si elle manque.
-  if (!s && def === FEUILLES.INVITATIONS) {
+  // Les feuilles des invitations et du journal ont été ajoutées après la première version :
+  // on les crée automatiquement si elles manquent dans un classeur déjà installé.
+  if (!s && (def === FEUILLES.INVITATIONS || def === FEUILLES.JOURNAL)) {
     s = classeur_().insertSheet(def.nom);
     s.getRange(1, 1, 1, def.entetes.length).setValues([def.entetes]);
     s.setFrozenRows(1);
@@ -306,6 +309,23 @@ function supprimerToutesLignesOu_(def, filtre) {
     delete cacheFeuilles[def.nom];
     return correspondantes.length;
   });
+}
+
+/**
+ * Ajoute une ligne au journal des actions. « u » est l'utilisateur qui agit, « action » un code
+ * court (par exemple 'eleve.creer'), « cible » ce qui est concerné, en clair.
+ * Le journal ne doit jamais faire échouer l'action qu'il décrit : elle est déjà faite quand on
+ * arrive ici. En cas de problème d'écriture, on le note dans les journaux d'exécution et on continue.
+ */
+function journaliser_(u, action, cible, detail) {
+  try {
+    inserer_(FEUILLES.JOURNAL, {
+      horodatage: nowIso_(), utilisateur_id: u ? u.id : '', utilisateur_nom: u ? u.nom : '',
+      action: action, cible: String(cible || '').slice(0, 200), detail: String(detail || '').slice(0, 300),
+    });
+  } catch (e) {
+    Logger.log('Journal non écrit (' + action + ') : ' + e.message);
+  }
 }
 
 function sansLigne_(o) {

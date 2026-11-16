@@ -64,9 +64,17 @@ function sha256Hex_(texte) {
   return octets.map((o) => ('0' + ((o + 256) % 256).toString(16)).slice(-2)).join('');
 }
 
-// ── Sessions : jetons stockés dans les propriétés du script, valables 12 h ──
+// ── Sessions : valables 12 h, rangées dans les propriétés du script ──
+// Le jeton lui-même n'est jamais stocké : la clé de la propriété est son empreinte SHA-256.
+// Quelqu'un qui lit les propriétés du script (un éditeur du projet, par exemple) n'y trouve donc
+// aucun jeton utilisable. SHA-256 simple suffit ici, contrairement aux mots de passe : un jeton
+// est un UUID aléatoire, impossible à deviner par essais successifs.
 
 const DUREE_SESSION_MS = 12 * 60 * 60 * 1000;
+
+function cleSession_(jeton) {
+  return 'session_' + sha256Hex_(String(jeton));
+}
 
 /** Supprime les sessions expirées : les propriétés du script ont une taille limitée, on évite qu'elles s'accumulent. */
 function purgerSessionsExpirees_() {
@@ -86,23 +94,24 @@ function creerSession_(utilisateur) {
   purgerSessionsExpirees_();
   const jeton = Utilities.getUuid();
   PropertiesService.getScriptProperties().setProperty(
-    'session_' + jeton,
+    cleSession_(jeton),
     JSON.stringify({ id: utilisateur.id, expire: Date.now() + DUREE_SESSION_MS })
   );
   return jeton;
 }
 
 function invaliderSession_(jeton) {
-  if (jeton) PropertiesService.getScriptProperties().deleteProperty('session_' + jeton);
+  if (jeton) PropertiesService.getScriptProperties().deleteProperty(cleSession_(jeton));
 }
 
 /** Coupe toutes les sessions ouvertes d'un utilisateur (mot de passe changé, compte supprimé). */
 function invaliderSessionsUtilisateur_(idUtilisateur, jetonAGarder) {
   const props = PropertiesService.getScriptProperties();
   const toutes = props.getProperties();
+  const cleAGarder = jetonAGarder ? cleSession_(jetonAGarder) : null;
   Object.keys(toutes).forEach((cle) => {
     if (cle.indexOf('session_') !== 0) return;
-    if (jetonAGarder && cle === 'session_' + jetonAGarder) return;
+    if (cle === cleAGarder) return;
     try {
       if (JSON.parse(toutes[cle]).id === idUtilisateur) props.deleteProperty(cle);
     } catch (e) {
@@ -113,8 +122,8 @@ function invaliderSessionsUtilisateur_(idUtilisateur, jetonAGarder) {
 
 /** Utilisateur courant, relu en base à CHAQUE appel : un compte supprimé ou un rôle changé prend effet immédiatement. */
 function utilisateurDuJeton_(jeton) {
-  if (!jeton) return null;
-  const brut = PropertiesService.getScriptProperties().getProperty('session_' + jeton);
+  if (!jeton || typeof jeton !== 'string' || jeton.length > 100) return null;
+  const brut = PropertiesService.getScriptProperties().getProperty(cleSession_(jeton));
   if (!brut) return null;
   let session;
   try {
@@ -160,6 +169,10 @@ function connexion(identifiant, motDePasse) {
     throw new Error(`Trop de tentatives. Réessayez dans ${BLOCAGE_CONNEXION_S / 60} minutes.`);
   }
   const u = versObjets_(FEUILLES.UTILISATEURS).find((x) => String(x.email).toLowerCase() === e && x.actif);
+  // Identifiant inconnu : on fait quand même le calcul lent, pour rien. Sans cela, la réponse serait
+  // nettement plus rapide que pour un identifiant existant, et le temps de réponse suffirait à
+  // découvrir quels identifiants existent.
+  if (!u) pbkdf2Hex_(typeof motDePasse === 'string' && motDePasse ? motDePasse : 'x', 'sel-factice', ITERATIONS_MDP);
   if (!u || !motDePasseValide_(motDePasse, u.mdp_hash, u.mdp_sel)) {
     cache.put(cleEchecs, String(echecs + 1), BLOCAGE_CONNEXION_S);
     throw new Error('Identifiant ou mot de passe incorrect.');
@@ -170,6 +183,7 @@ function connexion(identifiant, motDePasse) {
     mettreAJour_(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel });
   }
   const jeton = creerSession_(u);
+  journaliser_(u, 'connexion', u.email);
   return { jeton: jeton, id: u.id, nom: u.nom, email: u.email, role: u.role };
 }
 
@@ -187,6 +201,7 @@ function changerMonMotDePasse(jeton, ancien, nouveau) {
   const paire = hacherMotDePasse_(String(nouveau));
   mettreAJour_(FEUILLES.UTILISATEURS, u.id, { mdp_hash: paire.hash, mdp_sel: paire.sel });
   invaliderSessionsUtilisateur_(u.id, jeton); // les autres appareils devront se reconnecter
+  journaliser_(courant, 'compte.mot_de_passe', courant.email, 'changé par son titulaire');
   return { ok: true };
 }
 

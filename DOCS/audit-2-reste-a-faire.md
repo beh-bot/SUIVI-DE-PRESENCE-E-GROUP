@@ -24,12 +24,12 @@ Aucun point critique, mais plusieurs faiblesses.
 
 | Priorité | Point | Détail |
 |---|---|---|
-| P2 | Un identifiant inexistant répond plus vite | Le serveur ne calcule un hash que si le compte existe. Le temps de réponse révèle donc quels identifiants existent, et PBKDF2 a accentué cet écart. Correction : calculer un hash factice quand le compte n'existe pas |
-| P2 | Jetons de session stockés en clair | Toute personne ayant accès à l'éditeur du script peut lire les jetons dans les propriétés et se faire passer pour un utilisateur. Correction : ne stocker que le SHA-256 du jeton |
+| P2 | Un identifiant inexistant répond plus vite | **Fait (fiche 10).** Le calcul lent est fait aussi pour un identifiant inconnu |
+| P2 | Jetons de session stockés en clair | **Fait (fiche 10).** Seule l'empreinte SHA-256 du jeton est stockée. Chaque utilisateur se reconnecte une fois après la mise à jour |
 | P2 | Sessions dans les propriétés du script | Ce stockage est limité en taille et n'est nettoyé qu'à la connexion. Chaque connexion relit toutes les propriétés |
 | P2 | Lien d'invitation administrateur | Quiconque obtient le lien devient administrateur. Il est envoyé par WhatsApp et stocké en clair dans la feuille `Invitations` |
 | P2 | Mots de passe choisis par l'administrateur | Il les connaît, les transmet par messagerie, et rien n'oblige l'encadreur à les changer à la première connexion |
-| P2 | Aucun journal des actions | Impossible de savoir qui a supprimé un élève ou modifié un compte |
+| P2 | Aucun journal des actions | **Fait (fiche 10).** Feuille Journal et page Journal des actions. Il n'est pas infalsifiable et grandit sans limite |
 | P3 | Règle de mot de passe minimale | 8 caractères, sans vérification contre les mots de passe courants |
 | P3 | Page `?test=1` publique | Elle révèle si l'installation est terminée |
 | P3 | Blocage volontaire d'un compte | Cinq erreurs volontaires bloquent un identifiant 15 minutes (voir fiche 02) |

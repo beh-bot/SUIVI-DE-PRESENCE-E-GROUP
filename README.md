@@ -13,6 +13,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 - **Corbeille** : un élève ou une séance supprimés gardent leur historique et peuvent être rétablis.
 - **Sauvegarde** : copie des données dans un autre classeur, à la demande ou chaque nuit sur sept jours.
 - **Import** : une liste d'élèves se colle depuis un tableur ou se charge en CSV.
+- **Journal** : connexions et modifications sont tracées (qui, quoi, quand) et consultables par l'administrateur.
 
 ## Fichiers
 
@@ -21,7 +22,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `Code.gs` | Point d'entrée `doGet()` ; `?test=1` affiche un diagnostic du déploiement |
 | `Index.html` | Tout l'écran : application monopage en JavaScript natif, CSS intégré |
 | `Api.gs` | Fonctions appelées par l'écran : validation, élèves, séances, pointage, exports |
-| `Auth.gs` | Mots de passe (PBKDF2), sessions (jeton valable 12 h), limite de tentatives |
+| `Auth.gs` | Mots de passe (PBKDF2), sessions (jeton valable 12 h, stocké sous forme d'empreinte), limite de tentatives |
 | `Db.gs` | Lecture et écriture des feuilles, verrou, menu d'installation dans Sheets |
 | `WhatsApp.gs` | Envoi du message d'absence et journal des notifications |
 | `Sauvegarde.gs` | Copie des données dans un autre classeur, menu de sauvegarde |
@@ -30,7 +31,7 @@ Elle tourne entièrement sur **Google Apps Script**, avec un classeur **Google S
 | `tests/apercu-local.cjs` | Aperçu de l'application dans le navigateur, sans Google |
 | `DOCS/` | Explication de chaque modification, et audit de ce qu'il reste à faire |
 
-Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`. Un élève est rattaché à une séance par le texte de sa **classe**, qui doit être écrit exactement pareil des deux côtés.
+Les feuilles du classeur servent de tables : `Utilisateurs`, `Eleves`, `Seances`, `Presences`, `Invitations`, `Notifications`, `Journal`. Un élève est rattaché à une séance par le texte de sa **classe**, qui doit être écrit exactement pareil des deux côtés.
 
 ## Installation
 
